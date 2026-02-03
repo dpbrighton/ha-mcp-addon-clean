@@ -1,9 +1,11 @@
-import uvicorn
+from fastapi import FastAPI
 
-if __name__ == "__main__":
-    uvicorn.run(
-        "ha_mcp_server:app",
-        host="0.0.0.0",
-        port=8000,
-        log_level="info",
-    )
+app = FastAPI()
+
+
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "message": "Home Assistant MCP running"
+    }
