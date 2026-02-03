@@ -13,4 +13,4 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 COPY ha_mcp_server.py /app/ha_mcp_server.py
 WORKDIR /app
 
-CMD ["python3", "/app/ha_mcp_server.py"]
+CMD ["uvicorn", "ha_mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]
