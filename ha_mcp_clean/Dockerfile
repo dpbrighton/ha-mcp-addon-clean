@@ -1,16 +1,14 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install system Python + deps
-RUN apk add --no-cache python3 py3-requests
+RUN apk add --no-cache \
+    python3 \
+    py3-fastapi \
+    py3-uvicorn \
+    py3-requests
 
-# Create virtualenv (avoids PEP 668 error)
-RUN python3 -m venv /opt/venv
+COPY ha_mcp_server.py /app/ha_mcp_server.py
 
-RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir fastapi uvicorn starlette
+WORKDIR /app
 
-ENV PATH="/opt/venv/bin:$PATH"
-
-COPY ha_mcp_server.py /ha_mcp_server.py
-COPY rootfs/ /
+CMD ["python3", "/app/ha_mcp_server.py"]
