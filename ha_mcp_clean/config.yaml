@@ -1,7 +1,7 @@
 name: Home Assistant MCP Server Clean
 slug: ha_mcp_clean
 version: "1.0.0"
-description: MCP-style API for Home Assistant (overview only)
+description: MCP-style API for Home Assistant
 startup: application
 boot: auto
 init: false
@@ -12,7 +12,7 @@ arch:
 host_network: true
 
 options:
-  ha_token: ""
+  ha_token: ""  # Enter your long-lived token here in GUI
 
 schema:
   ha_token: str
