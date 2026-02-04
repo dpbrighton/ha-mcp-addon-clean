@@ -1,16 +1,18 @@
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base:latest
+ARG BUILD_VERSION=1.0.0
+ARG BUILD_ARCH=aarch64
 
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    py3-requests
+FROM $BUILD_FROM
 
-RUN pip3 install --no-cache-dir --break-system-packages \
-    fastapi \
-    uvicorn
+# Install python + requests + FastAPI + uvicorn
+RUN apk add --no-cache python3 py3-pip
+RUN pip3 install --no-cache-dir fastapi uvicorn requests
 
-COPY ha_mcp_server.py /app/ha_mcp_server.py
-WORKDIR /app
+# Copy server
+COPY ha_mcp_server.py /
 
-CMD ["uvicorn", "ha_mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set working directory
+WORKDIR /
+
+# Start script will be run
+CMD ["/run"]
