@@ -12,7 +12,11 @@ arch:
 host_network: true
 
 options:
-  ha_token: ""
+  ha_token: ""                   # existing long-term token, unchanged
+  ollama_base_url: "http://192.168.0.165:11434"
+  ollama_model: "qwen2.5-coder:7b"
 
 schema:
   ha_token: str
+  ollama_base_url: str
+  ollama_model: str
