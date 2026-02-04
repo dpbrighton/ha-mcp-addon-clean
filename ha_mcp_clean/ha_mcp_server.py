@@ -1,100 +1,80 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
 import os
 import requests
 
-app = FastAPI(title="Home Assistant MCP Server")
+app = FastAPI()
 
-# Read token from add-on GUI config
+# Get Home Assistant token from environment variable set by add-on
 HA_TOKEN = os.environ.get("HA_TOKEN")
 if not HA_TOKEN:
     raise RuntimeError("HA_TOKEN not set! Please configure it in the add-on options.")
 
-# Base headers for Home Assistant Supervisor API
+# Base URL for Home Assistant Supervisor API
+HA_URL = "http://supervisor/core/api"
+
 HEADERS = {
     "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
 
-# Base URL for Home Assistant Supervisor API
-HA_BASE_URL = "http://supervisor/core/api"
-
-
 @app.get("/api/overview")
 def overview():
-    """Return general Home Assistant overview information."""
+    """Return a high-level overview of Home Assistant installation"""
     try:
-        url = f"{HA_BASE_URL}/states"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=10)
         resp.raise_for_status()
-        states = resp.json()
-        areas = set()
-        devices = set()
-        entities_count = len(states)
-        automations_count = 0
-        scripts_count = 0
-        dashboards_count = 0
-
-        # Count unique areas and devices
-        for entity in states:
-            area = entity.get("attributes", {}).get("area_id")
-            if area:
-                areas.add(area)
-            device = entity.get("attributes", {}).get("device_id")
-            if device:
-                devices.add(device)
-
-            # Count automations and scripts
-            domain = entity.get("entity_id", "").split(".")[0]
-            if domain == "automation":
-                automations_count += 1
-            elif domain == "script":
-                scripts_count += 1
-            elif domain == "dashboard":
-                dashboards_count += 1
-
-        data = {
-            "home_assistant": {
-                "version": os.environ.get("SUPERVISOR_VERSION", "unknown"),
-                "installation_type": "Home Assistant OS",
-                "location_name": "Home",
-                "time_zone": "Europe/London",
-                "currency": "GBP",
-                "unit_system": {"length": "metric", "mass": "metric", "temperature": "celsius"},
-            },
-            "counts": {
-                "areas": len(areas),
-                "devices": len(devices),
-                "entities": entities_count,
-                "automations": automations_count,
-                "scripts": scripts_count,
-                "dashboards": dashboards_count,
-            },
-        }
-        return JSONResponse(content=data)
+        config_data = resp.json()
     except requests.RequestException as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        raise HTTPException(status_code=500, detail=f"Failed to get overview: {e}")
 
+    # Count areas, devices, entities, automations, scripts, dashboards
+    try:
+        resp_states = requests.get(f"{HA_URL}/states", headers=HEADERS, timeout=10)
+        resp_states.raise_for_status()
+        states = resp_states.json()
+    except requests.RequestException:
+        states = []
+
+    # Return a structured overview
+    return {
+        "home_assistant": {
+            "version": config_data.get("version"),
+            "installation_type": config_data.get("installation_type"),
+            "location_name": config_data.get("location_name"),
+            "time_zone": config_data.get("time_zone"),
+            "currency": config_data.get("currency"),
+            "unit_system": config_data.get("unit_system"),
+        },
+        "counts": {
+            "areas": len(config_data.get("areas", [])),
+            "devices": len(config_data.get("devices", [])),
+            "entities": len(states),
+            "automations": len(config_data.get("automations", [])),
+            "scripts": len(config_data.get("scripts", [])),
+            "dashboards": len(config_data.get("dashboards", [])),
+        }
+    }
 
 @app.get("/api/entities")
 def entities():
-    """Return all entities with domain, area, and state info."""
+    """Return all entities with their domain, area, attributes, and state"""
     try:
-        url = f"{HA_BASE_URL}/states"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(f"{HA_URL}/states", headers=HEADERS, timeout=10)
         resp.raise_for_status()
         states = resp.json()
-
-        data = []
-        for entity in states:
-            data.append({
-                "entity_id": entity.get("entity_id"),
-                "state": entity.get("state"),
-                "attributes": entity.get("attributes", {}),
-                "area": entity.get("attributes", {}).get("area_id"),
-                "domain": entity.get("entity_id", "").split(".")[0],
-            })
-
-        return JSONResponse(content={"entities": data})
     except requests.RequestException as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        raise HTTPException(status_code=500, detail=f"Failed to get entities: {e}")
+
+    data = []
+    for entity in states:
+        entity_id = entity.get("entity_id")
+        attributes = entity.get("attributes", {})
+        data.append({
+            "entity_id": entity_id,
+            "state": entity.get("state"),
+            "attributes": attributes,
+            "area": attributes.get("area_id"),
+            "domain": entity_id.split(".")[0] if entity_id else None
+        })
+
+    return {"entities": data}
