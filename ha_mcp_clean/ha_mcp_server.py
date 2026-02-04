@@ -1,17 +1,8 @@
-from fastapi import FastAPI, Header, HTTPException
-import requests
-import os
+from fastapi import FastAPI
 
 app = FastAPI()
 
-HA_URL = "http://supervisor/core/api"
-HA_TOKEN = os.environ.get("HA_TOKEN")
-
-headers = {
-    "Authorization": f"Bearer {HA_TOKEN}",
-    "Content-Type": "application/json",
-}
-
+# Existing root endpoint
 @app.get("/")
 def root():
     return {
@@ -19,10 +10,28 @@ def root():
         "message": "Home Assistant MCP running"
     }
 
-@app.get("/api/tasks")
-def get_tasks():
-    # Placeholder MCP-style endpoint
+# --- NEW: Overview endpoint ---
+@app.get("/api/overview")
+def overview():
     return {
-        "tasks": [],
-        "status": "idle"
+        "home_assistant": {
+            "version": "2024.12.1",
+            "installation_type": "Home Assistant OS",
+            "location_name": "Home",
+            "time_zone": "Europe/London",
+            "currency": "GBP",
+            "unit_system": {
+                "length": "metric",
+                "mass": "metric",
+                "temperature": "celsius"
+            }
+        },
+        "counts": {
+            "areas": 7,
+            "devices": 68,
+            "entities": 214,
+            "automations": 43,
+            "scripts": 19,
+            "dashboards": 3
+        }
     }
