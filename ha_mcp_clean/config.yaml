@@ -1,15 +1,16 @@
-name: Home Assistant MCP Server Clean
-slug: ha_mcp_clean
+name: Home Assistant MCP Server
+slug: ha_mcp_server
+description: MCP server for Home Assistant
 version: "1.0.0"
-description: MCP-style API for Home Assistant
-startup: application
+startup: services
 boot: auto
 init: false
 
 arch:
+  - amd64
   - aarch64
-
-host_network: true
+  - armv7
+  - armhf
 
 options:
   ha_token: ""
@@ -18,4 +19,12 @@ schema:
   ha_token: str
 
 environment:
-  HA_TOKEN: "!secret ha_token"
+  HA_TOKEN: "!ha_token"
+
+ports:
+  8000/tcp: 8000
+
+ports_description:
+  8000/tcp: MCP API server
+
+host_network: true
