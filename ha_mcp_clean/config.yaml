@@ -8,25 +8,24 @@ boot: auto
 init: false
 
 arch:
-
-* amd64
-* aarch64
-* armv7
-* armhf
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
 
 options:
-ha_token: ""
+  ha_token: ""
 
 schema:
-ha_token: str
+  ha_token: str
 
 environment:
-HA_TOKEN: "!ha_token"
+  HA_TOKEN: "!ha_token"
 
 ports:
-8000/tcp: 8000
+  8000/tcp: 8000
 
 ports_description:
-8000/tcp: MCP API server
+  8000/tcp: MCP API server
 
 host_network: true
