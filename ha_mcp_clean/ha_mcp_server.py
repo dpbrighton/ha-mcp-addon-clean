@@ -1,47 +1,72 @@
 from fastapi import FastAPI, HTTPException
 import os
 import requests
+import sys
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-# Read token from add-on environment
+# -------------------------------
+# DIAGNOSTIC ENVIRONMENT LOGGING
+# -------------------------------
+print("=== MCP ENVIRONMENT DUMP ===", flush=True)
+
+for key, value in os.environ.items():
+    if "HA" in key or "TOKEN" in key:
+        print(f"{key}={value}", flush=True)
+
+print("=== END ENV DUMP ===", flush=True)
+
+# -------------------------------
+# TOKEN HANDLING
+# -------------------------------
 HA_TOKEN = os.environ.get("HA_TOKEN")
 
 if not HA_TOKEN:
-    raise RuntimeError(
-        "HA_TOKEN not set. Please configure ha_token in the add-on options."
-    )
-
-# Normal Home Assistant Core API (NOT Supervisor)
-HA_URL = "http://homeassistant:8123/api"
+    print("❌ ERROR: HA_TOKEN not found in environment", flush=True)
+else:
+    print(f"✅ HA_TOKEN detected (truncated): {HA_TOKEN[:10]}...", flush=True)
 
 HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}",
+    "Authorization": f"Bearer {HA_TOKEN}" if HA_TOKEN else "",
     "Content-Type": "application/json",
 }
 
+# Supervisor API endpoint (correct for add-ons)
+HA_URL = "http://supervisor/core/api"
 
-@app.get("/api/tasks")
-def tasks():
-    """Simple heartbeat endpoint for MCP client."""
-    return {"status": "ok"}
+# -------------------------------
+# HEALTH CHECK
+# -------------------------------
+@app.get("/")
+def root():
+    return {
+        "status": "running",
+        "ha_token_present": bool(HA_TOKEN),
+    }
 
-
+# -------------------------------
+# OVERVIEW ENDPOINT
+# -------------------------------
 @app.get("/api/overview")
 def overview():
-    """Return a basic overview of Home Assistant."""
+    if not HA_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="HA_TOKEN not set in add-on environment",
+        )
+
     try:
         resp = requests.get(
             f"{HA_URL}/config",
             headers=HEADERS,
-            timeout=10,
+            timeout=5,
         )
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Home Assistant API: {e}",
+            detail=f"Error contacting Supervisor API: {e}",
         )
 
     return {
@@ -61,3 +86,11 @@ def overview():
             "dashboards": 0,
         },
     }
+
+# -------------------------------
+# TASKS ENDPOINT (stub)
+# -------------------------------
+@app.get("/api/tasks")
+def tasks():
+    return []
+
