@@ -1,56 +1,52 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import os
 import requests
 
-app = FastAPI(title="Home Assistant MCP Server")
+app = FastAPI(title="Home Assistant MCP Server (Diagnostic)")
 
-# Home Assistant Supervisor API base URL
-HA_URL = "http://supervisor/core/api"
-
-# Read token injected by Home Assistant add-on options
+# Read HA token from environment variable set by add-on options
 HA_TOKEN = os.environ.get("HA_TOKEN")
 
 if not HA_TOKEN:
-    # Fail loudly so it appears in add-on logs
-    raise RuntimeError(
-        "HA_TOKEN not set. Add-on options must define ha_token."
-    )
+    print("⚠️ Warning: HA_TOKEN not set. Check add-on configuration!")
+else:
+    print(f"✅ HA_TOKEN detected: {HA_TOKEN[:8]}... (truncated for security)")
 
 HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}",
+    "Authorization": f"Bearer {HA_TOKEN}" if HA_TOKEN else "",
     "Content-Type": "application/json",
 }
 
-
-@app.get("/")
-def root():
-    """Sanity check endpoint"""
-    return {"status": "ok", "service": "ha-mcp"}
-
+HA_URL = "http://supervisor/core/api"  # Supervisor API endpoint
 
 @app.get("/api/overview")
 def overview():
-    """
-    Diagnostic overview endpoint.
-    Returns raw Home Assistant response so we can see exactly what HA returns.
-    """
+    """Return a summary of Home Assistant environment and counts."""
+    if not HA_TOKEN:
+        raise HTTPException(status_code=500, detail="HA_TOKEN missing, cannot contact HA API.")
+    
     try:
-        resp = requests.get(
-            f"{HA_URL}/config",
-            headers=HEADERS,
-            timeout=5,
-        )
+        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
+        resp.raise_for_status()
+        config = resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Error contacting HA API: {e}")
 
-        return {
-            "debug": True,
-            "ha_url": f"{HA_URL}/config",
-            "status_code": resp.status_code,
-            "response_text": resp.text,
-        }
-
-    except Exception as e:
-        return {
-            "debug": True,
-            "exception": str(e),
-            "ha_url": HA_URL,
-        }
+    # Minimal overview
+    return {
+        "home_assistant": {
+            "version": config.get("version"),
+            "installation_type": config.get("installation_type"),
+            "location_name": config.get("location_name"),
+            "time_zone": config.get("time_zone"),
+            "unit_system": config.get("unit_system"),
+        },
+        "counts": {
+            "areas": 0,
+            "devices": 0,
+            "entities": 0,
+            "automations": 0,
+            "scripts": 0,
+            "dashboards": 0,
+        },
+    }
