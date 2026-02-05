@@ -16,3 +16,6 @@ options:
 
 schema:
   ha_token: str
+
+environment:
+  HA_TOKEN: "!secret ha_token"
