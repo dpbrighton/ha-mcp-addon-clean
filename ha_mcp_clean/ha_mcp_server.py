@@ -4,7 +4,6 @@ import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-# Read HA token from environment variable set by add-on options
 HA_TOKEN = os.environ.get("HA_TOKEN")
 if not HA_TOKEN:
     raise RuntimeError(
@@ -16,11 +15,11 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-HA_URL = "http://supervisor/core/api"  # Supervisor API endpoint
+HA_URL = "http://supervisor/core/api"
 
 @app.get("/api/overview")
 def overview():
-    """Return a summary of Home Assistant environment and counts."""
+    """Return Home Assistant environment overview and counts"""
     try:
         resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
         resp.raise_for_status()
@@ -28,7 +27,6 @@ def overview():
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Error contacting HA API: {e}")
 
-    # Dummy counts for demonstration; can expand to real counts later
     return {
         "home_assistant": {
             "version": config.get("version"),
