@@ -1,30 +1,49 @@
 from fastapi import FastAPI, HTTPException
+import os
 import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-# ===== TEMPORARY HARD-CODED TOKEN FOR TESTING =====
-HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIwOWU0NGRkM2Q3YWI0OWExYmQ4YTE1OGRiZWY5MWJmMyIsImlhdCI6MTc2ODgyMDk5NiwiZXhwIjoyMDg0MTgwOTk2fQ.rp9vAIImtNuLmANGWQAbwxgPH4MpUoHeRNH0qPFPHCI"  # Replace with your actual token
-print(f"Using HA_TOKEN: {HA_TOKEN[:8]}... (truncated)")
+# Read token from add-on environment
+HA_TOKEN = os.environ.get("HA_TOKEN")
+
+if not HA_TOKEN:
+    raise RuntimeError(
+        "HA_TOKEN not set. Please configure ha_token in the add-on options."
+    )
+
+# Normal Home Assistant Core API (NOT Supervisor)
+HA_URL = "http://homeassistant:8123/api"
 
 HEADERS = {
     "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
 
-HA_URL = "http://supervisor/core/api"  # Supervisor API endpoint
+
+@app.get("/api/tasks")
+def tasks():
+    """Simple heartbeat endpoint for MCP client."""
+    return {"status": "ok"}
+
 
 @app.get("/api/overview")
 def overview():
-    """Return a summary of Home Assistant environment and counts."""
+    """Return a basic overview of Home Assistant."""
     try:
-        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
+        resp = requests.get(
+            f"{HA_URL}/config",
+            headers=HEADERS,
+            timeout=10,
+        )
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error contacting HA API: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error contacting Home Assistant API: {e}",
+        )
 
-    # Dummy counts for demonstration; can expand to real counts later
     return {
         "home_assistant": {
             "version": config.get("version"),
@@ -42,8 +61,3 @@ def overview():
             "dashboards": 0,
         },
     }
-
-# Optional: keep /api/tasks placeholder for Mac client to stop showing 404s
-@app.get("/api/tasks")
-def tasks():
-    return {"tasks": []}
