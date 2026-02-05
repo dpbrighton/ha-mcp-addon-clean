@@ -1,19 +1,14 @@
 from fastapi import FastAPI, HTTPException
-import os
 import requests
 
-app = FastAPI(title="Home Assistant MCP Server (Diagnostic)")
+app = FastAPI(title="Home Assistant MCP Server")
 
-# Read HA token from environment variable set by add-on options
-HA_TOKEN = os.environ.get("HA_TOKEN")
-
-if not HA_TOKEN:
-    print("⚠️ Warning: HA_TOKEN not set. Check add-on configuration!")
-else:
-    print(f"✅ HA_TOKEN detected: {HA_TOKEN[:8]}... (truncated for security)")
+# ===== TEMPORARY HARD-CODED TOKEN FOR TESTING =====
+HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIwOWU0NGRkM2Q3YWI0OWExYmQ4YTE1OGRiZWY5MWJmMyIsImlhdCI6MTc2ODgyMDk5NiwiZXhwIjoyMDg0MTgwOTk2fQ.rp9vAIImtNuLmANGWQAbwxgPH4MpUoHeRNH0qPFPHCI"  # Replace with your actual token
+print(f"Using HA_TOKEN: {HA_TOKEN[:8]}... (truncated)")
 
 HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}" if HA_TOKEN else "",
+    "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
 
@@ -22,9 +17,6 @@ HA_URL = "http://supervisor/core/api"  # Supervisor API endpoint
 @app.get("/api/overview")
 def overview():
     """Return a summary of Home Assistant environment and counts."""
-    if not HA_TOKEN:
-        raise HTTPException(status_code=500, detail="HA_TOKEN missing, cannot contact HA API.")
-    
     try:
         resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
         resp.raise_for_status()
@@ -32,7 +24,7 @@ def overview():
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Error contacting HA API: {e}")
 
-    # Minimal overview
+    # Dummy counts for demonstration; can expand to real counts later
     return {
         "home_assistant": {
             "version": config.get("version"),
@@ -50,3 +42,8 @@ def overview():
             "dashboards": 0,
         },
     }
+
+# Optional: keep /api/tasks placeholder for Mac client to stop showing 404s
+@app.get("/api/tasks")
+def tasks():
+    return {"tasks": []}
