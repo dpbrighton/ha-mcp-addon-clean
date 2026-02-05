@@ -20,7 +20,7 @@ schema:
   ha_token: str
 
 environment:
-  HA_TOKEN: "!ha_token"
+  HA_TOKEN: "${ha_token}"
 
 ports:
   8000/tcp: 8000
