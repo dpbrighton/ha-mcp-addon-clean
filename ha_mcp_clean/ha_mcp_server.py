@@ -1,45 +1,56 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 import os
 import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-HA_URL = "http://homeassistant:8123/api"
+# Home Assistant Supervisor API base URL
+HA_URL = "http://supervisor/core/api"
+
+# Read token injected by Home Assistant add-on options
+HA_TOKEN = os.environ.get("HA_TOKEN")
+
+if not HA_TOKEN:
+    # Fail loudly so it appears in add-on logs
+    raise RuntimeError(
+        "HA_TOKEN not set. Add-on options must define ha_token."
+    )
+
+HEADERS = {
+    "Authorization": f"Bearer {HA_TOKEN}",
+    "Content-Type": "application/json",
+}
 
 
-def get_headers():
-    token = os.environ.get("HA_TOKEN")
-    if not token:
-        raise HTTPException(
-            status_code=500,
-            detail="HA_TOKEN not set in add-on configuration",
-        )
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+@app.get("/")
+def root():
+    """Sanity check endpoint"""
+    return {"status": "ok", "service": "ha-mcp"}
 
 
 @app.get("/api/overview")
 def overview():
+    """
+    Diagnostic overview endpoint.
+    Returns raw Home Assistant response so we can see exactly what HA returns.
+    """
     try:
         resp = requests.get(
             f"{HA_URL}/config",
-            headers=get_headers(),
+            headers=HEADERS,
             timeout=5,
         )
-        resp.raise_for_status()
-        config = resp.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=str(e))
 
-    return {
-        "home_assistant": {
-            "version": config.get("version"),
-            "installation_type": config.get("installation_type"),
-            "location_name": config.get("location_name"),
-            "time_zone": config.get("time_zone"),
-            "unit_system": config.get("unit_system"),
-        },
-        "counts": {},
-    }
+        return {
+            "debug": True,
+            "ha_url": f"{HA_URL}/config",
+            "status_code": resp.status_code,
+            "response_text": resp.text,
+        }
+
+    except Exception as e:
+        return {
+            "debug": True,
+            "exception": str(e),
+            "ha_url": HA_URL,
+        }
