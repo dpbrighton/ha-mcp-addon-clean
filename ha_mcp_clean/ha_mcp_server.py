@@ -4,7 +4,7 @@ import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-HA_URL = "http://supervisor/core/api"
+HA_URL = "http://homeassistant:8123/api"
 
 
 def get_headers():
