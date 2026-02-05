@@ -1,47 +1,49 @@
 from fastapi import FastAPI, HTTPException
 import os
 import requests
-import sys
 
 app = FastAPI(title="Home Assistant MCP Server")
+
+# -------------------------------
+# HELPER FUNCTION: Get current HA headers
+# -------------------------------
+def get_ha_headers():
+    """
+    Dynamically read HA_TOKEN from environment on each request.
+    Trims whitespace to avoid common token issues.
+    """
+    token = os.environ.get("HA_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+# -------------------------------
+# HA CORE API URL
+# -------------------------------
+# Using core HA API for long-lived token compatibility
+HA_URL = "http://homeassistant:8123/api"
 
 # -------------------------------
 # DIAGNOSTIC ENVIRONMENT LOGGING
 # -------------------------------
 print("=== MCP ENVIRONMENT DUMP ===", flush=True)
-
 for key, value in os.environ.items():
     if "HA" in key or "TOKEN" in key:
-        print(f"{key}={value}", flush=True)
-
+        print(f"{key}='{value}'", flush=True)
 print("=== END ENV DUMP ===", flush=True)
-
-# -------------------------------
-# TOKEN HANDLING
-# -------------------------------
-HA_TOKEN = os.environ.get("HA_TOKEN")
-
-if not HA_TOKEN:
-    print("❌ ERROR: HA_TOKEN not found in environment", flush=True)
-else:
-    print(f"✅ HA_TOKEN detected (truncated): {HA_TOKEN[:10]}...", flush=True)
-
-HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}" if HA_TOKEN else "",
-    "Content-Type": "application/json",
-}
-
-# Supervisor API endpoint (correct for add-ons)
-HA_URL = "http://supervisor/core/api"
 
 # -------------------------------
 # HEALTH CHECK
 # -------------------------------
 @app.get("/")
 def root():
+    token_present = bool(os.environ.get("HA_TOKEN", "").strip())
     return {
         "status": "running",
-        "ha_token_present": bool(HA_TOKEN),
+        "ha_token_present": token_present
     }
 
 # -------------------------------
@@ -49,33 +51,33 @@ def root():
 # -------------------------------
 @app.get("/api/overview")
 def overview():
-    if not HA_TOKEN:
-        raise HTTPException(
-            status_code=500,
-            detail="HA_TOKEN not set in add-on environment",
-        )
-
+    """
+    Fetch Home Assistant configuration and provide a summary.
+    """
     try:
-        resp = requests.get(
-            f"{HA_URL}/config",
-            headers=HEADERS,
-            timeout=5,
-        )
+        headers = get_ha_headers()
+        resp = requests.get(f"{HA_URL}/config", headers=headers, timeout=5)
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Supervisor API: {e}",
+            detail=f"Error contacting Home Assistant API: {e}"
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
         )
 
+    # Example structure — counts can be filled dynamically later
     return {
         "home_assistant": {
             "version": config.get("version"),
-            "installation_type": config.get("installation_type"),
-            "location_name": config.get("location_name"),
+            "location_name": config.get("name"),
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
+            "installation_type": "homeassistant_os",
         },
         "counts": {
             "areas": 0,
@@ -92,5 +94,13 @@ def overview():
 # -------------------------------
 @app.get("/api/tasks")
 def tasks():
+    """
+    Stub endpoint for AI to retrieve or manage tasks.
+    """
     return []
 
+# -------------------------------
+# DYNAMIC ENTITY / DASHBOARD ENDPOINTS (future)
+# -------------------------------
+# Example placeholders for AI-driven generation
+# You can add endpoints here to create dashboards, automations, etc.
