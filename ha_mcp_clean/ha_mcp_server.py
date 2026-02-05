@@ -4,28 +4,34 @@ import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-HA_TOKEN = os.environ.get("HA_TOKEN")
-if not HA_TOKEN:
-    raise RuntimeError(
-        "HA_TOKEN not set! Please configure it in the add-on options in Home Assistant."
-    )
-
-HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}",
-    "Content-Type": "application/json",
-}
-
 HA_URL = "http://supervisor/core/api"
+
+
+def get_headers():
+    token = os.environ.get("HA_TOKEN")
+    if not token:
+        raise HTTPException(
+            status_code=500,
+            detail="HA_TOKEN not set in add-on configuration",
+        )
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
 
 @app.get("/api/overview")
 def overview():
-    """Return Home Assistant environment overview and counts"""
     try:
-        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
+        resp = requests.get(
+            f"{HA_URL}/config",
+            headers=get_headers(),
+            timeout=5,
+        )
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error contacting HA API: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
 
     return {
         "home_assistant": {
@@ -35,12 +41,5 @@ def overview():
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
         },
-        "counts": {
-            "areas": 0,
-            "devices": 0,
-            "entities": 0,
-            "automations": 0,
-            "scripts": 0,
-            "dashboards": 0,
-        },
+        "counts": {},
     }
