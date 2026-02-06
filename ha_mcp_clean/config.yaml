@@ -14,7 +14,7 @@ arch:
   - armhf
 
 options:
-  ha_token: !secret ha_mcp_token  # read token from secrets.yaml
+  ha_token: ""
 
 schema:
   ha_token: str
@@ -28,4 +28,4 @@ ports:
 ports_description:
   8000/tcp: MCP API server
 
-host_network: true  # keep this since it’s required
+host_network: true
