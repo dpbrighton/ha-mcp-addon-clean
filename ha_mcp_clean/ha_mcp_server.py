@@ -5,42 +5,66 @@ import requests
 app = FastAPI(title="Home Assistant MCP Server")
 
 # -------------------------------
-# HA TOKEN read once at startup
+# HA Core URL
 # -------------------------------
-HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
-if not HA_TOKEN:
-    raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
-
-HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}",
-    "Content-Type": "application/json",
-}
-
 HA_URL = "http://homeassistant:8123/api"
 
 # -------------------------------
-# Diagnostics
+# Function to get HA headers
 # -------------------------------
-print("=== MCP ENVIRONMENT CHECK ===", flush=True)
-print(f"HA_TOKEN present: {bool(HA_TOKEN)}", flush=True)
-print("=== END ENV CHECK ===", flush=True)
+def get_ha_headers():
+    """
+    Reads HA_TOKEN from environment safely at request time.
+    Raises RuntimeError if token is missing or empty.
+    """
+    token = os.environ.get("HA_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
 
 # -------------------------------
-# Helper function to fetch HA endpoints
+# Startup event: verify token
+# -------------------------------
+@app.on_event("startup")
+def check_ha_token():
+    try:
+        _ = get_ha_headers()
+        print("✅ HA_TOKEN is present at startup")
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        # Container will still run; endpoints will raise 500 if token missing
+
+# -------------------------------
+# Helper: fetch data from HA Core
 # -------------------------------
 def ha_get(path: str):
-    resp = requests.get(f"{HA_URL}{path}", headers=HEADERS, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    """
+    GET request to Home Assistant Core API with proper headers.
+    Raises HTTPException on request failure.
+    """
+    headers = get_ha_headers()
+    try:
+        resp = requests.get(f"{HA_URL}{path}", headers=headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Error contacting Home Assistant API: {e}")
 
 # -------------------------------
 # Health check
 # -------------------------------
 @app.get("/")
 def root():
+    """
+    Simple health check endpoint.
+    """
+    token_present = bool(os.environ.get("HA_TOKEN", "").strip())
     return {
         "status": "running",
-        "ha_token_present": bool(HA_TOKEN)
+        "ha_token_present": token_present
     }
 
 # -------------------------------
@@ -48,10 +72,13 @@ def root():
 # -------------------------------
 @app.get("/api/overview")
 def overview():
+    """
+    Fetch Home Assistant configuration and return summary.
+    """
     try:
         config = ha_get("/config")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "home_assistant": {
@@ -76,14 +103,20 @@ def overview():
 # -------------------------------
 @app.get("/api/entities")
 def entities():
+    """
+    Returns canonical entity inventory.
+    Preserves entity_id, device_id, area_id exactly as in HA.
+    """
     try:
         states = ha_get("/states")
         areas = ha_get("/areas")
         devices = ha_get("/devices")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException as e:
+        raise e
 
-    # Map areas and devices
+    # Map areas and devices for fast lookup
     area_map = {area["area_id"]: area["name"] for area in areas}
     device_map = {device["id"]: {"name": device.get("name"), "area_id": device.get("area_id")} for device in devices}
 
@@ -115,11 +148,17 @@ def entities():
             "attributes": {k: v for k, v in attrs.items() if k not in ("friendly_name", "device_id")}
         })
 
-    return {"total": len(results), "entities": results}
+    return {
+        "total": len(results),
+        "entities": results
+    }
 
 # -------------------------------
 # Tasks endpoint (stub)
 # -------------------------------
 @app.get("/api/tasks")
 def tasks():
+    """
+    Placeholder endpoint for future AI task management.
+    """
     return []
