@@ -5,74 +5,68 @@ import requests
 app = FastAPI(title="Home Assistant MCP Server")
 
 # -------------------------------
-# HELPER FUNCTION: Get Supervisor headers
+# Read long-lived token from environment
 # -------------------------------
-def get_ha_headers():
-    """
-    Use SUPERVISOR_TOKEN provided automatically to all add-ons.
-    This avoids long-lived tokens, secrets, and YAML issues.
-    """
-    token = os.environ.get("SUPERVISOR_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("SUPERVISOR_TOKEN not set. Are we running as an add-on?")
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
+if not HA_TOKEN:
+    print("❌ ERROR: HA_TOKEN not set in environment", flush=True)
+
+HEADERS = {
+    "Authorization": f"Bearer {HA_TOKEN}" if HA_TOKEN else "",
+    "Content-Type": "application/json",
+}
 
 # -------------------------------
-# SUPERVISOR API URL (correct for add-ons)
+# Use Core API (not Supervisor API)
 # -------------------------------
-HA_URL = "http://supervisor/core/api"
+HA_URL = "http://homeassistant:8123/api"
 
 # -------------------------------
-# DIAGNOSTIC ENVIRONMENT LOGGING
+# Diagnostic environment dump
 # -------------------------------
-print("=== MCP ENVIRONMENT CHECK ===", flush=True)
-print(f"SUPERVISOR_TOKEN present: {bool(os.environ.get('SUPERVISOR_TOKEN'))}", flush=True)
-print("=== END ENV CHECK ===", flush=True)
+print("=== MCP ENVIRONMENT DUMP ===", flush=True)
+for key, value in os.environ.items():
+    if "HA" in key or "TOKEN" in key:
+        print(f"{key}='{value}'", flush=True)
+print("=== END ENV DUMP ===", flush=True)
 
 # -------------------------------
-# HEALTH CHECK
+# Health check
 # -------------------------------
 @app.get("/")
 def root():
     return {
         "status": "running",
-        "supervisor_token_present": bool(os.environ.get("SUPERVISOR_TOKEN")),
+        "ha_token_present": bool(HA_TOKEN),
     }
 
 # -------------------------------
-# OVERVIEW ENDPOINT
+# Overview endpoint
 # -------------------------------
 @app.get("/api/overview")
 def overview():
-    """
-    Fetch Home Assistant configuration and provide a summary.
-    """
+    if not HA_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="HA_TOKEN not set. Add-on configuration required."
+        )
     try:
-        headers = get_ha_headers()
-        resp = requests.get(f"{HA_URL}/config", headers=headers, timeout=5)
+        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Supervisor API: {e}",
-        )
-    except RuntimeError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e),
+            detail=f"Error contacting Home Assistant Core API: {e}"
         )
 
     return {
         "home_assistant": {
             "version": config.get("version"),
-            "location_name": config.get("location_name"),
+            "location_name": config.get("name"),
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
-            "installation_type": config.get("installation_type"),
+            "installation_type": "homeassistant_os",
         },
         "counts": {
             "areas": 0,
@@ -85,19 +79,12 @@ def overview():
     }
 
 # -------------------------------
-# TASKS ENDPOINT (stub)
+# Tasks endpoint (stub)
 # -------------------------------
 @app.get("/api/tasks")
 def tasks():
-    """
-    Stub endpoint for AI to retrieve or manage tasks.
-    """
     return []
 
 # -------------------------------
-# FUTURE MCP EXTENSIONS
+# Future endpoints (dashboards, automations, etc.)
 # -------------------------------
-# - entities
-# - services
-# - automations
-# - dashboards
