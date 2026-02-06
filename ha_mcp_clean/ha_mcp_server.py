@@ -5,45 +5,41 @@ import requests
 app = FastAPI(title="Home Assistant MCP Server")
 
 # -------------------------------
-# HELPER FUNCTION: Get current HA headers
+# HELPER FUNCTION: Get Supervisor headers
 # -------------------------------
 def get_ha_headers():
     """
-    Dynamically read HA_TOKEN from environment on each request.
-    Trims whitespace to avoid common token issues.
+    Use SUPERVISOR_TOKEN provided automatically to all add-ons.
+    This avoids long-lived tokens, secrets, and YAML issues.
     """
-    token = os.environ.get("HA_TOKEN", "").strip()
+    token = os.environ.get("SUPERVISOR_TOKEN", "").strip()
     if not token:
-        raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
+        raise RuntimeError("SUPERVISOR_TOKEN not set. Are we running as an add-on?")
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
 # -------------------------------
-# HA CORE API URL
+# SUPERVISOR API URL (correct for add-ons)
 # -------------------------------
-# Using core HA API for long-lived token compatibility
-HA_URL = "http://homeassistant:8123/api"
+HA_URL = "http://supervisor/core/api"
 
 # -------------------------------
 # DIAGNOSTIC ENVIRONMENT LOGGING
 # -------------------------------
-print("=== MCP ENVIRONMENT DUMP ===", flush=True)
-for key, value in os.environ.items():
-    if "HA" in key or "TOKEN" in key:
-        print(f"{key}='{value}'", flush=True)
-print("=== END ENV DUMP ===", flush=True)
+print("=== MCP ENVIRONMENT CHECK ===", flush=True)
+print(f"SUPERVISOR_TOKEN present: {bool(os.environ.get('SUPERVISOR_TOKEN'))}", flush=True)
+print("=== END ENV CHECK ===", flush=True)
 
 # -------------------------------
 # HEALTH CHECK
 # -------------------------------
 @app.get("/")
 def root():
-    token_present = bool(os.environ.get("HA_TOKEN", "").strip())
     return {
         "status": "running",
-        "ha_token_present": token_present
+        "supervisor_token_present": bool(os.environ.get("SUPERVISOR_TOKEN")),
     }
 
 # -------------------------------
@@ -62,22 +58,21 @@ def overview():
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Home Assistant API: {e}"
+            detail=f"Error contacting Supervisor API: {e}",
         )
     except RuntimeError as e:
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=str(e),
         )
 
-    # Example structure — counts can be filled dynamically later
     return {
         "home_assistant": {
             "version": config.get("version"),
-            "location_name": config.get("name"),
+            "location_name": config.get("location_name"),
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
-            "installation_type": "homeassistant_os",
+            "installation_type": config.get("installation_type"),
         },
         "counts": {
             "areas": 0,
@@ -100,7 +95,9 @@ def tasks():
     return []
 
 # -------------------------------
-# DYNAMIC ENTITY / DASHBOARD ENDPOINTS (future)
+# FUTURE MCP EXTENSIONS
 # -------------------------------
-# Example placeholders for AI-driven generation
-# You can add endpoints here to create dashboards, automations, etc.
+# - entities
+# - services
+# - automations
+# - dashboards
