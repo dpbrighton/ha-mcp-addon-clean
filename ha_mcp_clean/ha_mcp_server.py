@@ -5,16 +5,16 @@ import requests
 app = FastAPI(title="Home Assistant MCP Server")
 
 # -------------------------------
-# HA Core URL
+# HA Core API URL
 # -------------------------------
 HA_URL = "http://homeassistant:8123/api"
 
 # -------------------------------
-# Function to get HA headers
+# Function to get HA headers safely
 # -------------------------------
 def get_ha_headers():
     """
-    Reads HA_TOKEN from environment safely at request time.
+    Reads HA_TOKEN from environment on each request.
     Raises RuntimeError if token is missing or empty.
     """
     token = os.environ.get("HA_TOKEN", "").strip()
@@ -26,7 +26,7 @@ def get_ha_headers():
     }
 
 # -------------------------------
-# Startup event: verify token
+# Startup event to verify token
 # -------------------------------
 @app.on_event("startup")
 def check_ha_token():
@@ -35,15 +35,15 @@ def check_ha_token():
         print("✅ HA_TOKEN is present at startup")
     except RuntimeError as e:
         print(f"❌ {e}")
-        # Container will still run; endpoints will raise 500 if token missing
+        # Container continues running; endpoints will raise 500 if token missing
 
 # -------------------------------
-# Helper: fetch data from HA Core
+# Helper: fetch from HA Core
 # -------------------------------
 def ha_get(path: str):
     """
     GET request to Home Assistant Core API with proper headers.
-    Raises HTTPException on request failure.
+    Raises HTTPException if request fails.
     """
     headers = get_ha_headers()
     try:
@@ -54,17 +54,13 @@ def ha_get(path: str):
         raise HTTPException(status_code=502, detail=f"Error contacting Home Assistant API: {e}")
 
 # -------------------------------
-# Health check
+# Health check endpoint
 # -------------------------------
 @app.get("/")
 def root():
-    """
-    Simple health check endpoint.
-    """
-    token_present = bool(os.environ.get("HA_TOKEN", "").strip())
     return {
         "status": "running",
-        "ha_token_present": token_present
+        "ha_token_present": bool(os.environ.get("HA_TOKEN", "").strip())
     }
 
 # -------------------------------
@@ -72,13 +68,12 @@ def root():
 # -------------------------------
 @app.get("/api/overview")
 def overview():
-    """
-    Fetch Home Assistant configuration and return summary.
-    """
     try:
         config = ha_get("/config")
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException as e:
+        raise e
 
     return {
         "home_assistant": {
@@ -105,7 +100,7 @@ def overview():
 def entities():
     """
     Returns canonical entity inventory.
-    Preserves entity_id, device_id, area_id exactly as in HA.
+    Preserves entity_id, device_id, area_id exactly as in Home Assistant.
     """
     try:
         states = ha_get("/states")
@@ -116,7 +111,7 @@ def entities():
     except HTTPException as e:
         raise e
 
-    # Map areas and devices for fast lookup
+    # Map areas and devices
     area_map = {area["area_id"]: area["name"] for area in areas}
     device_map = {device["id"]: {"name": device.get("name"), "area_id": device.get("area_id")} for device in devices}
 
@@ -159,6 +154,6 @@ def entities():
 @app.get("/api/tasks")
 def tasks():
     """
-    Placeholder endpoint for future AI task management.
+    Placeholder for future AI task endpoints.
     """
     return []
