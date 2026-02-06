@@ -13,7 +13,8 @@ arch:
   - armv7
   - armhf
 
-hassio_api: true
+supervisor_api: true
+homeassistant_api: true
 
 ports:
   8000/tcp: 8000
