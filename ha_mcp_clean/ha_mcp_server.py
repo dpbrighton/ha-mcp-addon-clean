@@ -1,75 +1,71 @@
 from fastapi import FastAPI, HTTPException
-import json
 import os
 import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-OPTIONS_PATH = "/data/options.json"
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
+
 HA_URL = "http://homeassistant:8123/api"
 
-
-def get_ha_token():
-    if not os.path.exists(OPTIONS_PATH):
-        raise RuntimeError("options.json not found (add-on config not saved)")
-
-    with open(OPTIONS_PATH, "r") as f:
-        options = json.load(f)
-
-    token = options.get("ha_token", "").strip()
-    if not token:
-        raise RuntimeError("ha_token is empty in add-on configuration")
-
-    return token
-
+# -------------------------------------------------
+# TOKEN HANDLING
+# -------------------------------------------------
 
 def get_ha_headers():
-    token = get_ha_token()
+    """
+    Read HA_TOKEN from environment on each request.
+    Strip whitespace to avoid copy/paste issues.
+    """
+    token = os.environ.get("HA_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
+# -------------------------------------------------
+# DIAGNOSTICS (startup only)
+# -------------------------------------------------
 
 print("=== MCP OPTIONS CHECK ===", flush=True)
-try:
-    print("ha_token present:", bool(get_ha_token()), flush=True)
-except Exception as e:
-    print(f"❌ {e}", flush=True)
+print(f"ha_token present: {bool(os.environ.get('HA_TOKEN', '').strip())}", flush=True)
 print("=== END OPTIONS CHECK ===", flush=True)
 
+# -------------------------------------------------
+# HELPER: GET FROM HA
+# -------------------------------------------------
+
+def ha_get(path: str):
+    headers = get_ha_headers()
+    resp = requests.get(f"{HA_URL}{path}", headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+# -------------------------------------------------
+# HEALTH CHECK
+# -------------------------------------------------
 
 @app.get("/")
 def root():
-    try:
-        get_ha_token()
-        token_ok = True
-    except Exception:
-        token_ok = False
-
     return {
         "status": "running",
-        "ha_token_present": token_ok
+        "ha_token_present": bool(os.environ.get("HA_TOKEN", "").strip())
     }
 
+# -------------------------------------------------
+# OVERVIEW ENDPOINT
+# -------------------------------------------------
 
 @app.get("/api/overview")
 def overview():
     try:
-        headers = get_ha_headers()
-        resp = requests.get(f"{HA_URL}/config", headers=headers, timeout=5)
-        resp.raise_for_status()
-        config = resp.json()
-    except requests.RequestException as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Error contacting Home Assistant API: {e}"
-        )
-    except RuntimeError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        config = ha_get("/config")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
     return {
         "home_assistant": {
@@ -78,5 +74,90 @@ def overview():
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
             "installation_type": "homeassistant_os",
-        }
+        },
+        "counts": {
+            "areas": 0,
+            "devices": 0,
+            "entities": 0,
+            "automations": 0,
+            "scripts": 0,
+            "dashboards": 0,
+        },
     }
+
+# -------------------------------------------------
+# ENTITIES ENDPOINT (PHASE 1 CORE)
+# -------------------------------------------------
+
+@app.get("/api/entities")
+def entities():
+    """
+    Canonical entity inventory.
+    Identifiers exactly match Home Assistant.
+    """
+    try:
+        states = ha_get("/states")
+        areas = ha_get("/areas")
+        devices = ha_get("/devices")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # Build lookup maps
+    area_map = {
+        area["area_id"]: area["name"]
+        for area in areas
+    }
+
+    device_map = {
+        device["id"]: {
+            "name": device.get("name"),
+            "area_id": device.get("area_id"),
+        }
+        for device in devices
+    }
+
+    results = []
+
+    for state in states:
+        entity_id = state["entity_id"]
+        domain = entity_id.split(".")[0]
+
+        attrs = state.get("attributes", {})
+        device_id = attrs.get("device_id")
+        device = device_map.get(device_id, {})
+
+        area_id = device.get("area_id")
+        area_name = area_map.get(area_id)
+
+        results.append({
+            "entity_id": entity_id,
+            "domain": domain,
+            "name": attrs.get("friendly_name"),
+            "state": state.get("state"),
+
+            "area_id": area_id,
+            "area_name": area_name,
+
+            "device_id": device_id,
+            "device_name": device.get("name"),
+
+            # Preserve attributes but exclude noisy identity fields
+            "attributes": {
+                k: v
+                for k, v in attrs.items()
+                if k not in ("friendly_name", "device_id")
+            }
+        })
+
+    return {
+        "total": len(results),
+        "entities": results
+    }
+
+# -------------------------------------------------
+# TASKS (STUB FOR FUTURE MCP ACTIONS)
+# -------------------------------------------------
+
+@app.get("/api/tasks")
+def tasks():
+    return []
