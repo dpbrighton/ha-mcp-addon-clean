@@ -4,62 +4,48 @@ import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-# -------------------------------------------------
-# CONFIG
-# -------------------------------------------------
+# -------------------------------
+# HA TOKEN read once at startup
+# -------------------------------
+HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
+if not HA_TOKEN:
+    raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
+
+HEADERS = {
+    "Authorization": f"Bearer {HA_TOKEN}",
+    "Content-Type": "application/json",
+}
 
 HA_URL = "http://homeassistant:8123/api"
 
-# -------------------------------------------------
-# TOKEN HANDLING
-# -------------------------------------------------
+# -------------------------------
+# Diagnostics
+# -------------------------------
+print("=== MCP ENVIRONMENT CHECK ===", flush=True)
+print(f"HA_TOKEN present: {bool(HA_TOKEN)}", flush=True)
+print("=== END ENV CHECK ===", flush=True)
 
-def get_ha_headers():
-    """
-    Read HA_TOKEN from environment on each request.
-    Strip whitespace to avoid copy/paste issues.
-    """
-    token = os.environ.get("HA_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-# -------------------------------------------------
-# DIAGNOSTICS (startup only)
-# -------------------------------------------------
-
-print("=== MCP OPTIONS CHECK ===", flush=True)
-print(f"ha_token present: {bool(os.environ.get('HA_TOKEN', '').strip())}", flush=True)
-print("=== END OPTIONS CHECK ===", flush=True)
-
-# -------------------------------------------------
-# HELPER: GET FROM HA
-# -------------------------------------------------
-
+# -------------------------------
+# Helper function to fetch HA endpoints
+# -------------------------------
 def ha_get(path: str):
-    headers = get_ha_headers()
-    resp = requests.get(f"{HA_URL}{path}", headers=headers, timeout=10)
+    resp = requests.get(f"{HA_URL}{path}", headers=HEADERS, timeout=10)
     resp.raise_for_status()
     return resp.json()
 
-# -------------------------------------------------
-# HEALTH CHECK
-# -------------------------------------------------
-
+# -------------------------------
+# Health check
+# -------------------------------
 @app.get("/")
 def root():
     return {
         "status": "running",
-        "ha_token_present": bool(os.environ.get("HA_TOKEN", "").strip())
+        "ha_token_present": bool(HA_TOKEN)
     }
 
-# -------------------------------------------------
-# OVERVIEW ENDPOINT
-# -------------------------------------------------
-
+# -------------------------------
+# Overview endpoint
+# -------------------------------
 @app.get("/api/overview")
 def overview():
     try:
@@ -85,16 +71,11 @@ def overview():
         },
     }
 
-# -------------------------------------------------
-# ENTITIES ENDPOINT (PHASE 1 CORE)
-# -------------------------------------------------
-
+# -------------------------------
+# Entities endpoint
+# -------------------------------
 @app.get("/api/entities")
 def entities():
-    """
-    Canonical entity inventory.
-    Identifiers exactly match Home Assistant.
-    """
     try:
         states = ha_get("/states")
         areas = ha_get("/areas")
@@ -102,19 +83,9 @@ def entities():
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    # Build lookup maps
-    area_map = {
-        area["area_id"]: area["name"]
-        for area in areas
-    }
-
-    device_map = {
-        device["id"]: {
-            "name": device.get("name"),
-            "area_id": device.get("area_id"),
-        }
-        for device in devices
-    }
+    # Map areas and devices
+    area_map = {area["area_id"]: area["name"] for area in areas}
+    device_map = {device["id"]: {"name": device.get("name"), "area_id": device.get("area_id")} for device in devices}
 
     results = []
 
@@ -141,23 +112,14 @@ def entities():
             "device_id": device_id,
             "device_name": device.get("name"),
 
-            # Preserve attributes but exclude noisy identity fields
-            "attributes": {
-                k: v
-                for k, v in attrs.items()
-                if k not in ("friendly_name", "device_id")
-            }
+            "attributes": {k: v for k, v in attrs.items() if k not in ("friendly_name", "device_id")}
         })
 
-    return {
-        "total": len(results),
-        "entities": results
-    }
+    return {"total": len(results), "entities": results}
 
-# -------------------------------------------------
-# TASKS (STUB FOR FUTURE MCP ACTIONS)
-# -------------------------------------------------
-
+# -------------------------------
+# Tasks endpoint (stub)
+# -------------------------------
 @app.get("/api/tasks")
 def tasks():
     return []
