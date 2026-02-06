@@ -1,63 +1,74 @@
 from fastapi import FastAPI, HTTPException
+import json
 import os
 import requests
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-# -------------------------------
-# Read long-lived token from environment
-# -------------------------------
-HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
-if not HA_TOKEN:
-    print("❌ ERROR: HA_TOKEN not set in environment", flush=True)
-
-HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}" if HA_TOKEN else "",
-    "Content-Type": "application/json",
-}
-
-# -------------------------------
-# Use Core API (not Supervisor API)
-# -------------------------------
+OPTIONS_PATH = "/data/options.json"
 HA_URL = "http://homeassistant:8123/api"
 
-# -------------------------------
-# Diagnostic environment dump
-# -------------------------------
-print("=== MCP ENVIRONMENT DUMP ===", flush=True)
-for key, value in os.environ.items():
-    if "HA" in key or "TOKEN" in key:
-        print(f"{key}='{value}'", flush=True)
-print("=== END ENV DUMP ===", flush=True)
 
-# -------------------------------
-# Health check
-# -------------------------------
-@app.get("/")
-def root():
+def get_ha_token():
+    if not os.path.exists(OPTIONS_PATH):
+        raise RuntimeError("options.json not found (add-on config not saved)")
+
+    with open(OPTIONS_PATH, "r") as f:
+        options = json.load(f)
+
+    token = options.get("ha_token", "").strip()
+    if not token:
+        raise RuntimeError("ha_token is empty in add-on configuration")
+
+    return token
+
+
+def get_ha_headers():
+    token = get_ha_token()
     return {
-        "status": "running",
-        "ha_token_present": bool(HA_TOKEN),
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
     }
 
-# -------------------------------
-# Overview endpoint
-# -------------------------------
+
+print("=== MCP OPTIONS CHECK ===", flush=True)
+try:
+    print("ha_token present:", bool(get_ha_token()), flush=True)
+except Exception as e:
+    print(f"❌ {e}", flush=True)
+print("=== END OPTIONS CHECK ===", flush=True)
+
+
+@app.get("/")
+def root():
+    try:
+        get_ha_token()
+        token_ok = True
+    except Exception:
+        token_ok = False
+
+    return {
+        "status": "running",
+        "ha_token_present": token_ok
+    }
+
+
 @app.get("/api/overview")
 def overview():
-    if not HA_TOKEN:
-        raise HTTPException(
-            status_code=500,
-            detail="HA_TOKEN not set. Add-on configuration required."
-        )
     try:
-        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
+        headers = get_ha_headers()
+        resp = requests.get(f"{HA_URL}/config", headers=headers, timeout=5)
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Home Assistant Core API: {e}"
+            detail=f"Error contacting Home Assistant API: {e}"
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
         )
 
     return {
@@ -67,24 +78,5 @@ def overview():
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
             "installation_type": "homeassistant_os",
-        },
-        "counts": {
-            "areas": 0,
-            "devices": 0,
-            "entities": 0,
-            "automations": 0,
-            "scripts": 0,
-            "dashboards": 0,
-        },
+        }
     }
-
-# -------------------------------
-# Tasks endpoint (stub)
-# -------------------------------
-@app.get("/api/tasks")
-def tasks():
-    return []
-
-# -------------------------------
-# Future endpoints (dashboards, automations, etc.)
-# -------------------------------
