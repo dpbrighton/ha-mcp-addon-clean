@@ -4,28 +4,31 @@ from fastapi import FastAPI, HTTPException
 
 app = FastAPI(title="Home Assistant MCP Server")
 
-# === Global HA token ===
-HA_TOKEN = os.environ.get("HA_TOKEN")
-if not HA_TOKEN:
-    raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
-
-# === Home Assistant connection settings ===
+# Global variable to store the token (filled at startup)
+HA_TOKEN = None
 HA_HOST = os.environ.get("HA_HOST", "http://homeassistant.local:8123")
-HEADERS = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+HEADERS = {}
 
-# === Startup event ===
 @app.on_event("startup")
 def startup_event():
-    # Simple check to confirm we can talk to HA
+    global HA_TOKEN, HEADERS
+    HA_TOKEN = os.environ.get("HA_TOKEN")
+    if not HA_TOKEN:
+        print("❌ HA_TOKEN not set or empty. Check add-on config.")
+        return  # Do not raise at import time
+    HEADERS = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+    # Test connection
     try:
         resp = requests.get(f"{HA_HOST}/api/", headers=HEADERS, timeout=5)
         resp.raise_for_status()
+        print("✅ Connected to Home Assistant")
     except requests.RequestException as e:
-        raise RuntimeError(f"Failed to connect to Home Assistant at {HA_HOST}: {e}")
+        print(f"⚠️ Failed to connect to Home Assistant: {e}")
 
-# === Overview endpoint ===
 @app.get("/api/overview")
 def get_overview():
+    if not HA_TOKEN:
+        raise HTTPException(status_code=500, detail="HA_TOKEN not set")
     try:
         resp = requests.get(f"{HA_HOST}/api/states", headers=HEADERS, timeout=5)
         resp.raise_for_status()
@@ -38,9 +41,10 @@ def get_overview():
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Error fetching overview: {e}")
 
-# === Entities endpoint ===
 @app.get("/api/entities")
 def get_entities():
+    if not HA_TOKEN:
+        raise HTTPException(status_code=500, detail="HA_TOKEN not set")
     try:
         resp = requests.get(f"{HA_HOST}/api/states", headers=HEADERS, timeout=5)
         resp.raise_for_status()
