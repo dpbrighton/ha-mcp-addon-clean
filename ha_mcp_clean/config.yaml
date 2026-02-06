@@ -13,6 +13,8 @@ arch:
   - armv7
   - armhf
 
+supervisor: true
+
 ports:
   8000/tcp: 8000
 
