@@ -1,6 +1,6 @@
 name: Home Assistant MCP Server
 slug: ha_mcp_clean
-description: MCP server for Home Assistant — exposes HA to AI for dashboards and automations
+description: MCP server for Home Assistant
 version: "1.0.0"
 
 startup: application
@@ -13,19 +13,15 @@ arch:
   - armv7
   - armhf
 
-# Add-on option for the long-lived token
 options:
   ha_token: ""
 
-# Schema for validation
 schema:
   ha_token: str
 
-# Environment variable for the container
 environment:
-  HA_TOKEN: "!ha_token"
+  HA_TOKEN: "${ha_token}"
 
-# Expose the API port
 ports:
   8000/tcp: 8000
 
