@@ -113,4 +113,29 @@ def entities():
         results.append({
             "entity_id": entity_id,
             "domain": domain,
-            "name":
+            "name": attrs.get("friendly_name"),
+            "state": state.get("state"),
+
+            "area_id": area_id,
+            "area_name": area_name,
+
+            "device_id": device_id,
+            "device_name": device.get("name"),
+
+            "attributes": {k: v for k, v in attrs.items() if k not in ("friendly_name", "device_id")}
+        })
+
+    return {
+        "total": len(results),
+        "entities": results
+    }
+
+# -------------------------------
+# Tasks endpoint (stub)
+# -------------------------------
+@app.get("/api/tasks")
+def tasks():
+    """
+    Placeholder for future AI task endpoints.
+    """
+    return []
