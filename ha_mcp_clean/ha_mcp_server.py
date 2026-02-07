@@ -16,7 +16,7 @@ def log(msg: str):
     print(f"[MCP {SESSION_ID}] [{ts}] {msg}", flush=True)
 
 # -------------------------------------------------------------------
-# Environment + token handling (ADD-ON SAFE)
+# Environment + token handling (BASELINE – UNCHANGED)
 # -------------------------------------------------------------------
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
 
@@ -28,7 +28,7 @@ HEADERS = {
 }
 
 # -------------------------------------------------------------------
-# Startup diagnostics ONLY (baseline – unchanged)
+# Startup diagnostics ONLY (BASELINE – UNCHANGED)
 # -------------------------------------------------------------------
 @app.on_event("startup")
 def startup_event():
@@ -76,7 +76,7 @@ def root():
     }
 
 # -------------------------------------------------------------------
-# Overview endpoint (baseline – unchanged)
+# Overview endpoint (BASELINE – UNCHANGED)
 # -------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
@@ -113,7 +113,7 @@ def overview():
     }
 
 # -------------------------------------------------------------------
-# Entities endpoint (baseline – unchanged)
+# Entities endpoint (BASELINE – UNCHANGED)
 # -------------------------------------------------------------------
 @app.get("/api/entities")
 def entities():
@@ -144,7 +144,7 @@ def entities():
     }
 
 # -------------------------------------------------------------------
-# Tasks endpoint (v1.1 logic, baseline-safe)
+# Tasks endpoint (v1.1 – UNCHANGED)
 # -------------------------------------------------------------------
 @app.get("/api/tasks")
 def tasks():
@@ -156,7 +156,6 @@ def tasks():
         )
 
         if resp.status_code == 404:
-            # HA has no tasks configured
             return []
 
         resp.raise_for_status()
@@ -171,7 +170,7 @@ def tasks():
     return tasks_data
 
 # -------------------------------------------------------------------
-# Automations endpoint (incremental addition)
+# Automations endpoint (v1.1 – UNCHANGED)
 # -------------------------------------------------------------------
 @app.get("/api/automations")
 def automations():
@@ -197,4 +196,28 @@ def automations():
     return {
         "count": len(automations),
         "automations": automations,
+    }
+
+# -------------------------------------------------------------------
+# Devices endpoint (NEW – incremental addition only)
+# -------------------------------------------------------------------
+@app.get("/api/devices")
+def devices():
+    try:
+        resp = requests.get(
+            f"{HA_API_BASE}/config/device_registry/list",
+            headers=HEADERS,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        devices_data = resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching devices: {e}",
+        )
+
+    return {
+        "count": len(devices_data),
+        "devices": devices_data,
     }
