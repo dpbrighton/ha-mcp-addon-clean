@@ -1,100 +1,59 @@
 from fastapi import FastAPI, HTTPException
 import os
 import requests
-import uuid
-from datetime import datetime
 
-# -------------------------------------------------------------------
-# App setup
-# -------------------------------------------------------------------
 app = FastAPI(title="Home Assistant MCP Server")
 
-SESSION_ID = uuid.uuid4().hex[:8]
-
-def log(msg: str):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    print(f"[MCP {SESSION_ID}] [{ts}] {msg}", flush=True)
-
-# -------------------------------------------------------------------
-# Environment + token handling (ADD-ON SAFE)
-# -------------------------------------------------------------------
-SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
-
-HA_API_BASE = "http://supervisor/core/api"
+# -------------------------------
+# HA TOKEN read once at startup
+# -------------------------------
+HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
+if not HA_TOKEN:
+    raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
 
 HEADERS = {
-    "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+    "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
 
-# -------------------------------------------------------------------
-# Startup diagnostics ONLY (no hard crash unless token missing)
-# -------------------------------------------------------------------
-@app.on_event("startup")
-def startup_event():
-    log("=== MCP STARTUP BEGIN ===")
+HA_URL = "http://homeassistant:8123/api"
 
-    visible_keys = sorted(os.environ.keys())
-    log(f"Environment keys visible: {visible_keys}")
+# -------------------------------
+# Diagnostics (can comment out later)
+# -------------------------------
+import datetime
+def log(msg):
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[MCP {ts}] {msg}", flush=True)
 
-    if not SUPERVISOR_TOKEN:
-        log("❌ SUPERVISOR_TOKEN is missing")
-        raise RuntimeError("SUPERVISOR_TOKEN not set (this must run as a Home Assistant add-on)")
+log("=== MCP STARTUP BEGIN ===")
+log(f"Environment keys visible: {list(os.environ.keys())}")
+log(f"HA_TOKEN present: {'✅' if HA_TOKEN else '❌'}")
 
-    log("✅ SUPERVISOR_TOKEN present (value not logged)")
-
-    # Connectivity check (diagnostic, but fatal if unauthorized)
-    try:
-        log("Performing Home Assistant connectivity check")
-        resp = requests.get(
-            f"{HA_API_BASE}/config",
-            headers=HEADERS,
-            timeout=5,
-        )
-        log(f"HA connectivity check status: {resp.status_code}")
-
-        if resp.status_code != 200:
-            log(f"HA response body: {resp.text}")
-            raise RuntimeError("Home Assistant API did not return 200 at startup")
-
-        log("✅ Home Assistant connectivity confirmed")
-
-    except Exception as e:
-        log(f"❌ Exception during HA connectivity check: {e}")
-        raise
-
-    log("=== MCP STARTUP COMPLETE ===")
-
-# -------------------------------------------------------------------
-# Health check
-# -------------------------------------------------------------------
+# -------------------------------
+# HEALTH CHECK
+# -------------------------------
 @app.get("/")
 def root():
     return {
         "status": "running",
-        "session_id": SESSION_ID,
-        "supervisor_token_present": bool(SUPERVISOR_TOKEN),
+        "ha_token_present": bool(HA_TOKEN)
     }
 
-# -------------------------------------------------------------------
-# Overview endpoint
-# -------------------------------------------------------------------
+# -------------------------------
+# OVERVIEW ENDPOINT
+# -------------------------------
 @app.get("/api/overview")
 def overview():
     try:
-        resp = requests.get(
-            f"{HA_API_BASE}/config",
-            headers=HEADERS,
-            timeout=5,
-        )
+        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Home Assistant API: {e}",
+            detail=f"Error contacting Home Assistant API: {e}"
         )
-
     return {
         "home_assistant": {
             "version": config.get("version"),
@@ -113,40 +72,52 @@ def overview():
         },
     }
 
-# -------------------------------------------------------------------
-# Entities endpoint (simple, expandable)
-# -------------------------------------------------------------------
+# -------------------------------
+# ENTITIES ENDPOINT
+# -------------------------------
 @app.get("/api/entities")
 def entities():
     try:
-        resp = requests.get(
-            f"{HA_API_BASE}/states",
-            headers=HEADERS,
-            timeout=10,
-        )
+        resp = requests.get(f"{HA_URL}/states", headers=HEADERS, timeout=5)
         resp.raise_for_status()
-        data = resp.json()
+        states = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error fetching entities: {e}",
+            detail=f"Error contacting Home Assistant API: {e}"
         )
-
     return {
-        "count": len(data),
-        "entities": [
-            {
-                "entity_id": e.get("entity_id"),
-                "state": e.get("state"),
-                "domain": e.get("entity_id", "").split(".")[0],
-            }
-            for e in data
-        ],
+        "count": len(states),
+        "entities": states
     }
 
-# -------------------------------------------------------------------
-# Tasks endpoint (stub for MCP compatibility)
-# -------------------------------------------------------------------
+# -------------------------------
+# TASKS ENDPOINT (new)
+# -------------------------------
 @app.get("/api/tasks")
 def tasks():
+    # For now, this is a stub returning an empty list
+    # Later we can implement real task aggregation
     return []
+
+# -------------------------------
+# ADDITIONAL ENDPOINTS (stubs for later)
+# -------------------------------
+@app.get("/api/automations")
+def automations():
+    return []
+
+@app.get("/api/devices")
+def devices():
+    return []
+
+@app.get("/api/areas")
+def areas():
+    return []
+
+# -------------------------------
+# STARTUP EVENT
+# -------------------------------
+@app.on_event("startup")
+def startup_event():
+    log("=== MCP STARTUP COMPLETE ===")
