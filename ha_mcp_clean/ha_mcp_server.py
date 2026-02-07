@@ -3,9 +3,6 @@ import os
 import requests
 import uuid
 from datetime import datetime
-import asyncio
-import json
-import websockets
 
 # -------------------------------------------------------------------
 # App setup
@@ -18,7 +15,7 @@ def log(msg: str):
     print(f"[MCP {SESSION_ID}] [{ts}] {msg}", flush=True)
 
 # -------------------------------------------------------------------
-# Environment + token handling (baseline-safe)
+# Token & environment (baseline-safe)
 # -------------------------------------------------------------------
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
 if not SUPERVISOR_TOKEN:
@@ -30,7 +27,7 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# Store token internally for reuse
+# Internal token storage
 INTERNAL_TOKEN = SUPERVISOR_TOKEN
 
 # -------------------------------------------------------------------
@@ -154,47 +151,35 @@ def automations():
     return {"count": len(automations), "automations": automations}
 
 # -------------------------------------------------------------------
-# Devices endpoint (WebSocket-backed, uses stored token)
+# Devices endpoint (internal REST via Supervisor API)
 # -------------------------------------------------------------------
-async def fetch_devices_ws():
-    ws_url = "ws://homeassistant:8123/api/websocket"
-    try:
-        async with websockets.connect(ws_url) as ws:
-            # Step 1: Receive initial auth request
-            msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            msg_json = json.loads(msg)
-
-            # Step 2: Send auth using INTERNAL_TOKEN
-            auth_msg = {"type": "auth", "access_token": INTERNAL_TOKEN}
-            await ws.send(json.dumps(auth_msg))
-
-            # Step 3: Wait for auth response
-            auth_resp = await asyncio.wait_for(ws.recv(), timeout=5)
-            auth_resp_json = json.loads(auth_resp)
-            if not auth_resp_json.get("success", False):
-                log(f"WebSocket auth failed: {auth_resp_json}")
-                return []
-
-            # Step 4: Request device registry
-            req_id = 1
-            req_msg = {"id": req_id, "type": "config/device_registry/list"}
-            await ws.send(json.dumps(req_msg))
-
-            # Step 5: Wait for response
-            resp_msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            resp_json = json.loads(resp_msg)
-            if resp_json.get("success", False):
-                return resp_json.get("result", [])
-            else:
-                log(f"Device registry WebSocket failed: {resp_json}")
-                return []
-
-    except Exception as e:
-        log(f"WebSocket devices error: {e}")
-        return []
-
 @app.get("/api/devices")
 def devices():
-    # Run the async WS fetch in the event loop
-    devices_data = asyncio.run(fetch_devices_ws())
+    try:
+        resp = requests.get(f"{HA_API_BASE}/config/device_registry/list", headers=HEADERS, timeout=10)
+        if resp.status_code == 404:
+            return {"count": 0, "devices": []}
+        resp.raise_for_status()
+        devices_data = resp.json()
+    except requests.RequestException as e:
+        log(f"Error fetching devices: {e}")
+        return {"count": 0, "devices": []}
+
     return {"count": len(devices_data), "devices": devices_data}
+
+# -------------------------------------------------------------------
+# Areas endpoint (internal REST via Supervisor API)
+# -------------------------------------------------------------------
+@app.get("/api/areas")
+def areas():
+    try:
+        resp = requests.get(f"{HA_API_BASE}/config/area_registry/list", headers=HEADERS, timeout=10)
+        if resp.status_code == 404:
+            return {"count": 0, "areas": []}
+        resp.raise_for_status()
+        areas_data = resp.json()
+    except requests.RequestException as e:
+        log(f"Error fetching areas: {e}")
+        return {"count": 0, "areas": []}
+
+    return {"count": len(areas_data), "areas": areas_data}
