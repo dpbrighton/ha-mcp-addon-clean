@@ -209,7 +209,10 @@ def devices():
             headers=HEADERS,
             timeout=10,
         )
-        resp.raise_for_status()
+        
+log(f"Device registry status: {resp.status_code}")
+log(f"Device registry body: {resp.text}")
+resp.raise_for_status()
         devices_data = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
