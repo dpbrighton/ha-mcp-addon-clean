@@ -1,60 +1,99 @@
 from fastapi import FastAPI, HTTPException
 import os
 import requests
+import uuid
 from datetime import datetime
 
+# -------------------------------------------------------------------
+# App setup
+# -------------------------------------------------------------------
 app = FastAPI(title="Home Assistant MCP Server")
 
-# -------------------------------
-# HA TOKEN read once at startup
-# -------------------------------
-HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
-if not HA_TOKEN:
-    raise RuntimeError("HA_TOKEN not set or empty. Check add-on config.")
+SESSION_ID = uuid.uuid4().hex[:8]
+
+def log(msg: str):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[MCP {SESSION_ID}] [{ts}] {msg}", flush=True)
+
+# -------------------------------------------------------------------
+# Environment + token handling (ADD-ON SAFE)
+# -------------------------------------------------------------------
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
+
+HA_API_BASE = "http://supervisor/core/api"
 
 HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}",
+    "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
     "Content-Type": "application/json",
 }
 
-HA_URL = "http://homeassistant:8123/api"
+# -------------------------------------------------------------------
+# Startup diagnostics ONLY (baseline – unchanged)
+# -------------------------------------------------------------------
+@app.on_event("startup")
+def startup_event():
+    log("=== MCP STARTUP BEGIN ===")
 
-# -------------------------------
-# Diagnostics
-# -------------------------------
-def timestamp():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    visible_keys = sorted(os.environ.keys())
+    log(f"Environment keys visible: {visible_keys}")
 
-print(f"[{timestamp()}] === MCP ENVIRONMENT DUMP ===", flush=True)
-for key, value in os.environ.items():
-    if "HA" in key or "TOKEN" in key:
-        print(f"[{timestamp()}] {key}='{value}'", flush=True)
-print(f"[{timestamp()}] === END ENV DUMP ===", flush=True)
+    if not SUPERVISOR_TOKEN:
+        log("❌ SUPERVISOR_TOKEN is missing")
+        raise RuntimeError("SUPERVISOR_TOKEN not set (this must run as a Home Assistant add-on)")
 
-# -------------------------------
-# HEALTH CHECK
-# -------------------------------
+    log("✅ SUPERVISOR_TOKEN present (value not logged)")
+
+    try:
+        log("Performing Home Assistant connectivity check")
+        resp = requests.get(
+            f"{HA_API_BASE}/config",
+            headers=HEADERS,
+            timeout=5,
+        )
+        log(f"HA connectivity check status: {resp.status_code}")
+
+        if resp.status_code != 200:
+            log(f"HA response body: {resp.text}")
+            raise RuntimeError("Home Assistant API did not return 200 at startup")
+
+        log("✅ Home Assistant connectivity confirmed")
+
+    except Exception as e:
+        log(f"❌ Exception during HA connectivity check: {e}")
+        raise
+
+    log("=== MCP STARTUP COMPLETE ===")
+
+# -------------------------------------------------------------------
+# Health check
+# -------------------------------------------------------------------
 @app.get("/")
 def root():
     return {
         "status": "running",
-        "ha_token_present": bool(HA_TOKEN)
+        "session_id": SESSION_ID,
+        "supervisor_token_present": bool(SUPERVISOR_TOKEN),
     }
 
-# -------------------------------
-# OVERVIEW ENDPOINT
-# -------------------------------
+# -------------------------------------------------------------------
+# Overview endpoint (baseline – unchanged)
+# -------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
     try:
-        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
+        resp = requests.get(
+            f"{HA_API_BASE}/config",
+            headers=HEADERS,
+            timeout=5,
+        )
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Home Assistant API: {e}"
+            detail=f"Error contacting Home Assistant API: {e}",
         )
+
     return {
         "home_assistant": {
             "version": config.get("version"),
@@ -73,60 +112,89 @@ def overview():
         },
     }
 
-# -------------------------------
-# TASKS ENDPOINT
-# -------------------------------
+# -------------------------------------------------------------------
+# Entities endpoint (baseline – unchanged)
+# -------------------------------------------------------------------
+@app.get("/api/entities")
+def entities():
+    try:
+        resp = requests.get(
+            f"{HA_API_BASE}/states",
+            headers=HEADERS,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching entities: {e}",
+        )
+
+    return {
+        "count": len(data),
+        "entities": [
+            {
+                "entity_id": e.get("entity_id"),
+                "state": e.get("state"),
+                "domain": e.get("entity_id", "").split(".")[0],
+            }
+            for e in data
+        ],
+    }
+
+# -------------------------------------------------------------------
+# Tasks endpoint (v1.1 logic, baseline-safe)
+# -------------------------------------------------------------------
 @app.get("/api/tasks")
 def tasks():
     try:
-        resp = requests.get(f"{HA_URL}/services/task", headers=HEADERS, timeout=5)
+        resp = requests.get(
+            f"{HA_API_BASE}/services/task",
+            headers=HEADERS,
+            timeout=5,
+        )
+
         if resp.status_code == 404:
-            # If HA does not have tasks configured, return empty list
+            # HA has no tasks configured
             return []
+
         resp.raise_for_status()
         tasks_data = resp.json()
+
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error fetching tasks from Home Assistant API: {e}"
+            detail=f"Error fetching tasks from Home Assistant API: {e}",
         )
+
     return tasks_data
 
-# -------------------------------
-# AUTOMATIONS ENDPOINT
-# -------------------------------
+# -------------------------------------------------------------------
+# Automations endpoint (incremental addition)
+# -------------------------------------------------------------------
 @app.get("/api/automations")
 def automations():
     try:
-        resp = requests.get(f"{HA_URL}/states", headers=HEADERS, timeout=5)
+        resp = requests.get(
+            f"{HA_API_BASE}/states",
+            headers=HEADERS,
+            timeout=10,
+        )
         resp.raise_for_status()
-        all_states = resp.json()
-        automations_list = [
-            state for state in all_states if state.get("entity_id", "").startswith("automation.")
-        ]
+        data = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error fetching automations from Home Assistant API: {e}"
+            detail=f"Error fetching automations: {e}",
         )
-    return automations_list
 
-# -------------------------------
-# ENTRY POINT
-# -------------------------------
-@app.on_event("startup")
-def startup_event():
-    print(f"[{timestamp()}] === MCP STARTUP BEGIN ===", flush=True)
-    print(f"[{timestamp()}] Environment keys visible: {list(os.environ.keys())}", flush=True)
-    
-    # Simple connectivity check
-    try:
-        resp = requests.get(f"{HA_URL}/config", headers=HEADERS, timeout=5)
-        if resp.status_code != 200:
-            raise RuntimeError("Home Assistant API did not return 200 at startup")
-        print(f"[{timestamp()}] ✅ Home Assistant connectivity confirmed", flush=True)
-    except Exception as e:
-        print(f"[{timestamp()}] ❌ Exception during HA connectivity check: {e}", flush=True)
-        raise
+    automations = [
+        e for e in data
+        if e.get("entity_id", "").startswith("automation.")
+    ]
 
-    print(f"[{timestamp()}] === MCP STARTUP COMPLETE ===", flush=True)
+    return {
+        "count": len(automations),
+        "automations": automations,
+    }
