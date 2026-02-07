@@ -29,3 +29,6 @@ ports_description:
   8000/tcp: MCP API server
 
 host_network: true
+
+# 🔑 THIS IS THE CRITICAL LINE
+homeassistant_api: true
