@@ -199,7 +199,7 @@ def automations():
     }
 
 # -------------------------------------------------------------------
-# Devices endpoint (NEW – incremental addition only)
+# Devices endpoint (NEW – with diagnostics only)
 # -------------------------------------------------------------------
 @app.get("/api/devices")
 def devices():
@@ -209,11 +209,14 @@ def devices():
             headers=HEADERS,
             timeout=10,
         )
-        
-log(f"Device registry status: {resp.status_code}")
-log(f"Device registry body: {resp.text}")
-resp.raise_for_status()
+
+        # --- DIAGNOSTIC LOGGING (temporary, no behavior change) ---
+        log(f"Device registry status: {resp.status_code}")
+        log(f"Device registry body: {resp.text}")
+
+        resp.raise_for_status()
         devices_data = resp.json()
+
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
