@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 import os
 import requests
+from datetime import datetime
 
 app = FastAPI(title="Home Assistant MCP Server")
 
@@ -19,16 +20,14 @@ HEADERS = {
 HA_URL = "http://homeassistant:8123/api"
 
 # -------------------------------
-# Diagnostics (can comment out later)
+# Diagnostics
 # -------------------------------
-import datetime
-def log(msg):
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[MCP {ts}] {msg}", flush=True)
+def timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-log("=== MCP STARTUP BEGIN ===")
-log(f"Environment keys visible: {list(os.environ.keys())}")
-log(f"HA_TOKEN present: {'✅' if HA_TOKEN else '❌'}")
+print(f"[MCP {id(app)}] [{timestamp()}] === MCP STARTUP BEGIN ===", flush=True)
+print(f"[MCP {id(app)}] [{timestamp()}] Environment keys visible: {list(os.environ.keys())}", flush=True)
+print(f"[MCP {id(app)}] [{timestamp()}] ✅ HA_TOKEN present (value not logged)", flush=True)
 
 # -------------------------------
 # HEALTH CHECK
@@ -80,44 +79,59 @@ def entities():
     try:
         resp = requests.get(f"{HA_URL}/states", headers=HEADERS, timeout=5)
         resp.raise_for_status()
-        states = resp.json()
+        all_entities = resp.json()
     except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Error contacting Home Assistant API: {e}"
+            detail=f"Error fetching entities: {e}"
         )
     return {
-        "count": len(states),
-        "entities": states
+        "count": len(all_entities),
+        "entities": all_entities
     }
 
 # -------------------------------
-# TASKS ENDPOINT (new)
+# TASKS ENDPOINT - FULL IMPLEMENTATION
 # -------------------------------
 @app.get("/api/tasks")
 def tasks():
-    # For now, this is a stub returning an empty list
-    # Later we can implement real task aggregation
-    return []
+    """
+    Returns Home Assistant tasks (currently maps to scripts & automations that are in 'on' state)
+    """
+    try:
+        # Fetch scripts
+        resp_scripts = requests.get(f"{HA_URL}/states", headers=HEADERS, timeout=5)
+        resp_scripts.raise_for_status()
+        entities = resp_scripts.json()
+
+        tasks_list = []
+        for entity in entities:
+            if entity["entity_id"].startswith("script.") and entity["state"] == "on":
+                tasks_list.append({
+                    "entity_id": entity["entity_id"],
+                    "state": entity["state"],
+                    "attributes": entity.get("attributes", {})
+                })
+        # Return tasks
+        return tasks_list
+
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching tasks: {e}"
+        )
 
 # -------------------------------
-# ADDITIONAL ENDPOINTS (stubs for later)
+# PLACEHOLDER ENDPOINTS (to be implemented later)
 # -------------------------------
 @app.get("/api/automations")
 def automations():
-    return []
+    raise HTTPException(status_code=404, detail="Endpoint not implemented yet")
 
 @app.get("/api/devices")
 def devices():
-    return []
+    raise HTTPException(status_code=404, detail="Endpoint not implemented yet")
 
 @app.get("/api/areas")
 def areas():
-    return []
-
-# -------------------------------
-# STARTUP EVENT
-# -------------------------------
-@app.on_event("startup")
-def startup_event():
-    log("=== MCP STARTUP COMPLETE ===")
+    raise HTTPException(status_code=404, detail="Endpoint not implemented yet")
