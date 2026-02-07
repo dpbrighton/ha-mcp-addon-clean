@@ -7,10 +7,11 @@ RUN apk add --no-cache \
     py3-pip \
     py3-requests
 
-# Install FastAPI stack
+# Install FastAPI + Uvicorn + WebSockets
 RUN pip3 install --no-cache-dir --break-system-packages \
     fastapi \
-    uvicorn
+    uvicorn \
+    websockets
 
 # Copy app + wrapper
 COPY ha_mcp_server.py /app/ha_mcp_server.py
