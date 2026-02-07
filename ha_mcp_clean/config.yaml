@@ -20,7 +20,7 @@ schema:
   ha_token: str
 
 environment:
-  HA_TOKEN: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI5MDM5M2Q5ODQ2ZmU0YTM0YjA4MjI0OTE1YWRiODdhNCIsImlhdCI6MTc3MDMxMzc4NCwiZXhwIjoyMDg1NjczNzg0fQ.yn62NL4jLzkV6ky63Ai8hATYpO_Ckg8PO9iEOb3b_Wk"
+  HA_TOKEN: "${ha_token}"
 
 ports:
   8000/tcp: 8000
