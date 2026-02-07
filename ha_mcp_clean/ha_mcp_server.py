@@ -1,56 +1,109 @@
 import os
-import yaml
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import time
+import uuid
+import requests
+from datetime import datetime
+from fastapi import FastAPI, HTTPException
 
-app = FastAPI(title="Home Assistant MCP Server")
+# -----------------------------------------------------------------------------
+# Diagnostic helpers
+# -----------------------------------------------------------------------------
 
-# Allow all CORS (adjust if needed)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+STARTUP_ID = str(uuid.uuid4())[:8]
 
-# Read HA token from config.yaml at startup
-CONFIG_PATH = "/data/options.yaml"  # Home Assistant add-ons use options.yaml
-ha_token = None
+def log(msg: str):
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[MCP {STARTUP_ID}] [{ts}] {msg}", flush=True)
 
-def load_config():
-    global ha_token
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            config = yaml.safe_load(f)
-            ha_token = config.get("ha_token")
-            if not ha_token:
-                raise RuntimeError("❌ HA_TOKEN not set or empty in config.yaml")
-            print(f"✅ HA_TOKEN successfully loaded at startup")
-    except FileNotFoundError:
-        raise RuntimeError(f"❌ Config file not found at {CONFIG_PATH}")
-    except Exception as e:
-        raise RuntimeError(f"❌ Error loading config: {e}")
+# -----------------------------------------------------------------------------
+# FastAPI app
+# -----------------------------------------------------------------------------
 
-# Load the token at startup
-load_config()
+app = FastAPI()
 
-# Store the token for reuse in requests
+HA_TOKEN: str | None = None
+HA_HEADERS: dict | None = None
+HA_BASE_URL = "http://supervisor/core/api"
+
+# -----------------------------------------------------------------------------
+# Startup
+# -----------------------------------------------------------------------------
+
 @app.on_event("startup")
 def startup_event():
-    if not ha_token:
-        raise RuntimeError("❌ HA_TOKEN not set or empty. Check add-on config.")
-    print("✅ Application startup complete. HA_TOKEN ready for use.")
+    global HA_TOKEN, HA_HEADERS
 
-# Example endpoint using the token
+    log("=== MCP STARTUP BEGIN ===")
+
+    # Dump environment keys (NOT values) for diagnostics
+    env_keys = sorted(os.environ.keys())
+    log(f"Environment keys visible: {env_keys}")
+
+    HA_TOKEN = os.environ.get("HA_TOKEN")
+
+    if not HA_TOKEN or not HA_TOKEN.strip():
+        log("❌ HA_TOKEN is missing or empty")
+        raise RuntimeError("HA_TOKEN not set or empty. Check add-on configuration.")
+
+    log("✅ HA_TOKEN present (value not logged)")
+
+    HA_HEADERS = {
+        "Authorization": f"Bearer {HA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    # Sanity check: call Home Assistant once at startup
+    log("Performing Home Assistant connectivity check")
+    try:
+        r = requests.get(f"{HA_BASE_URL}/", headers=HA_HEADERS, timeout=5)
+        log(f"HA connectivity check status: {r.status_code}")
+        if r.status_code != 200:
+            log(f"HA response body: {r.text}")
+            raise RuntimeError("Home Assistant API did not return 200 at startup")
+    except Exception as e:
+        log(f"❌ Exception during HA connectivity check: {e}")
+        raise
+
+    log("=== MCP STARTUP COMPLETE ===")
+
+# -----------------------------------------------------------------------------
+# API endpoints
+# -----------------------------------------------------------------------------
+
 @app.get("/api/overview")
-def get_overview():
-    # This is where your previous logic fetching Home Assistant data goes
-    # Example return:
-    return {"status": "ok", "ha_token_present": bool(ha_token)}
+def api_overview():
+    log("Handling /api/overview request")
 
-@app.get("/api/entities")
-def get_entities():
-    # Example return:
-    return {"status": "ok", "ha_token_present": bool(ha_token)}
+    if not HA_HEADERS:
+        log("❌ HA_HEADERS not initialized")
+        raise HTTPException(status_code=500, detail="Server not initialized")
 
-# You can now safely use ha_token in any other function without re-reading config
+    try:
+        r = requests.get(
+            f"{HA_BASE_URL}/states",
+            headers=HA_HEADERS,
+            timeout=10,
+        )
+        log(f"/states status: {r.status_code}")
+
+        if r.status_code != 200:
+            log(f"/states error body: {r.text}")
+            raise HTTPException(status_code=502, detail="Home Assistant API error")
+
+        states = r.json()
+        log(f"Retrieved {len(states)} states from Home Assistant")
+
+        # Minimal, stable overview
+        result = {
+            "startup_id": STARTUP_ID,
+            "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+            "entity_count": len(states),
+        }
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log(f"❌ Exception in /api/overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
