@@ -18,18 +18,23 @@ def log(msg: str):
     print(f"[MCP {SESSION_ID}] [{ts}] {msg}", flush=True)
 
 # -------------------------------------------------------------------
-# Environment + token handling (BASELINE – UNCHANGED)
+# Environment + token handling (baseline-safe)
 # -------------------------------------------------------------------
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
-HA_API_BASE = "http://supervisor/core/api"
+if not SUPERVISOR_TOKEN:
+    raise RuntimeError("SUPERVISOR_TOKEN not set (must run as HA add-on)")
 
+HA_API_BASE = "http://supervisor/core/api"
 HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
     "Content-Type": "application/json",
 }
 
+# Store token internally for reuse
+INTERNAL_TOKEN = SUPERVISOR_TOKEN
+
 # -------------------------------------------------------------------
-# Startup diagnostics ONLY (BASELINE – UNCHANGED)
+# Startup diagnostics
 # -------------------------------------------------------------------
 @app.on_event("startup")
 def startup_event():
@@ -37,11 +42,7 @@ def startup_event():
     visible_keys = sorted(os.environ.keys())
     log(f"Environment keys visible: {visible_keys}")
 
-    if not SUPERVISOR_TOKEN:
-        log("❌ SUPERVISOR_TOKEN is missing")
-        raise RuntimeError("SUPERVISOR_TOKEN not set (must run as HA add-on)")
-
-    log("✅ SUPERVISOR_TOKEN present (value not logged)")
+    log("✅ SUPERVISOR_TOKEN stored internally")
 
     try:
         resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS, timeout=5)
@@ -68,7 +69,7 @@ def root():
     }
 
 # -------------------------------------------------------------------
-# Overview endpoint (BASELINE – UNCHANGED)
+# Overview endpoint
 # -------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
@@ -98,7 +99,7 @@ def overview():
     }
 
 # -------------------------------------------------------------------
-# Entities endpoint (BASELINE – UNCHANGED)
+# Entities endpoint
 # -------------------------------------------------------------------
 @app.get("/api/entities")
 def entities():
@@ -122,7 +123,7 @@ def entities():
     }
 
 # -------------------------------------------------------------------
-# Tasks endpoint (BASELINE – UNCHANGED)
+# Tasks endpoint
 # -------------------------------------------------------------------
 @app.get("/api/tasks")
 def tasks():
@@ -138,7 +139,7 @@ def tasks():
     return tasks_data
 
 # -------------------------------------------------------------------
-# Automations endpoint (BASELINE – UNCHANGED)
+# Automations endpoint
 # -------------------------------------------------------------------
 @app.get("/api/automations")
 def automations():
@@ -153,22 +154,22 @@ def automations():
     return {"count": len(automations), "automations": automations}
 
 # -------------------------------------------------------------------
-# Devices endpoint (NEW – WebSocket-backed)
+# Devices endpoint (WebSocket-backed, uses stored token)
 # -------------------------------------------------------------------
 async def fetch_devices_ws():
     ws_url = "ws://homeassistant:8123/api/websocket"
     try:
         async with websockets.connect(ws_url) as ws:
-            # Step 1: Receive authentication request
-            msg = await ws.recv()
+            # Step 1: Receive initial auth request
+            msg = await asyncio.wait_for(ws.recv(), timeout=5)
             msg_json = json.loads(msg)
 
-            # Step 2: Send auth using SUPERVISOR_TOKEN
-            auth_msg = {"type": "auth", "access_token": SUPERVISOR_TOKEN}
+            # Step 2: Send auth using INTERNAL_TOKEN
+            auth_msg = {"type": "auth", "access_token": INTERNAL_TOKEN}
             await ws.send(json.dumps(auth_msg))
 
             # Step 3: Wait for auth response
-            auth_resp = await ws.recv()
+            auth_resp = await asyncio.wait_for(ws.recv(), timeout=5)
             auth_resp_json = json.loads(auth_resp)
             if not auth_resp_json.get("success", False):
                 log(f"WebSocket auth failed: {auth_resp_json}")
@@ -180,9 +181,8 @@ async def fetch_devices_ws():
             await ws.send(json.dumps(req_msg))
 
             # Step 5: Wait for response
-            resp_msg = await ws.recv()
+            resp_msg = await asyncio.wait_for(ws.recv(), timeout=5)
             resp_json = json.loads(resp_msg)
-
             if resp_json.get("success", False):
                 return resp_json.get("result", [])
             else:
@@ -195,5 +195,6 @@ async def fetch_devices_ws():
 
 @app.get("/api/devices")
 def devices():
+    # Run the async WS fetch in the event loop
     devices_data = asyncio.run(fetch_devices_ws())
     return {"count": len(devices_data), "devices": devices_data}
