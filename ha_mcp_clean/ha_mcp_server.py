@@ -30,8 +30,6 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-INTERNAL_TOKEN = SUPERVISOR_TOKEN
-
 # -------------------------------------------------------------------
 # Startup diagnostics
 # -------------------------------------------------------------------
@@ -151,85 +149,52 @@ def automations():
     return {"count": len(automations), "automations": automations}
 
 # -------------------------------------------------------------------
-# Devices endpoint (internal WebSocket)
+# Internal WebSocket helpers
 # -------------------------------------------------------------------
-async def fetch_devices_ws():
+async def fetch_ws_registry(registry_type: str):
     ws_url = "ws://homeassistant:8123/api/websocket"
     try:
         async with websockets.connect(ws_url) as ws:
-            # Receive initial auth request
+            # Receive auth challenge
             msg = await asyncio.wait_for(ws.recv(), timeout=5)
             msg_json = json.loads(msg)
 
-            # Send auth using SUPERVISOR_TOKEN
-            auth_msg = {"type": "auth", "access_token": INTERNAL_TOKEN}
+            # Authenticate
+            auth_msg = {"type": "auth", "access_token": SUPERVISOR_TOKEN}
             await ws.send(json.dumps(auth_msg))
-
-            # Receive auth response
             auth_resp = await asyncio.wait_for(ws.recv(), timeout=5)
             auth_resp_json = json.loads(auth_resp)
             if auth_resp_json.get("type") != "auth_ok":
                 log(f"WebSocket auth failed: {auth_resp_json}")
                 return []
 
-            # Request device registry
-            req_id = 1
-            req_msg = {"id": req_id, "type": "config/device_registry/list"}
+            # Request registry
+            req_msg = {"id": 1, "type": f"config/{registry_type}/list"}
             await ws.send(json.dumps(req_msg))
-
             resp_msg = await asyncio.wait_for(ws.recv(), timeout=5)
             resp_json = json.loads(resp_msg)
             if resp_json.get("success", True) is False:
-                log(f"Device registry WS failed: {resp_json}")
+                log(f"{registry_type} registry WS failed: {resp_json}")
                 return []
+
             return resp_json.get("result", [])
 
     except Exception as e:
-        log(f"WebSocket devices error: {e}")
+        log(f"WebSocket {registry_type} error: {e}")
         return []
 
+# -------------------------------------------------------------------
+# Devices endpoint
+# -------------------------------------------------------------------
 @app.get("/api/devices")
-def devices():
-    return {"count": len(fetch_devices_ws()), "devices": asyncio.run(fetch_devices_ws())}
+async def devices():
+    result = await fetch_ws_registry("device_registry")
+    return {"count": len(result), "devices": result}
 
 # -------------------------------------------------------------------
-# Areas endpoint (internal WebSocket)
+# Areas endpoint
 # -------------------------------------------------------------------
-async def fetch_areas_ws():
-    ws_url = "ws://homeassistant:8123/api/websocket"
-    try:
-        async with websockets.connect(ws_url) as ws:
-            # Receive initial auth request
-            msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            msg_json = json.loads(msg)
-
-            # Auth
-            auth_msg = {"type": "auth", "access_token": INTERNAL_TOKEN}
-            await ws.send(json.dumps(auth_msg))
-
-            # Auth response
-            auth_resp = await asyncio.wait_for(ws.recv(), timeout=5)
-            auth_resp_json = json.loads(auth_resp)
-            if auth_resp_json.get("type") != "auth_ok":
-                log(f"WebSocket auth failed: {auth_resp_json}")
-                return []
-
-            # Request area registry
-            req_id = 2
-            req_msg = {"id": req_id, "type": "config/area_registry/list"}
-            await ws.send(json.dumps(req_msg))
-
-            resp_msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            resp_json = json.loads(resp_msg)
-            if resp_json.get("success", True) is False:
-                log(f"Area registry WS failed: {resp_json}")
-                return []
-            return resp_json.get("result", [])
-
-    except Exception as e:
-        log(f"WebSocket areas error: {e}")
-        return []
-
 @app.get("/api/areas")
-def areas():
-    return {"count": len(fetch_areas_ws()), "areas": asyncio.run(fetch_areas_ws())}
+async def areas():
+    result = await fetch_ws_registry("area_registry")
+    return {"count": len(result), "areas": result}
