@@ -3,9 +3,6 @@ import os
 import requests
 import uuid
 from datetime import datetime
-import json
-import websockets
-import asyncio
 
 # -------------------------------------------------------------------
 # App setup
@@ -22,9 +19,18 @@ def log(msg: str):
 # Environment + token handling (ADD-ON SAFE)
 # -------------------------------------------------------------------
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
+HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
+
 HA_API_BASE = "http://supervisor/core/api"
-HEADERS = {
+HA_BASE = "http://homeassistant:8123/api"
+
+HEADERS_SUPERVISOR = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+    "Content-Type": "application/json",
+}
+
+HEADERS_HA = {
+    "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
 
@@ -34,7 +40,6 @@ HEADERS = {
 @app.on_event("startup")
 def startup_event():
     log("=== MCP STARTUP BEGIN ===")
-
     visible_keys = sorted(os.environ.keys())
     log(f"Environment keys visible: {visible_keys}")
 
@@ -44,9 +49,10 @@ def startup_event():
 
     log("✅ SUPERVISOR_TOKEN present (value not logged)")
 
+    # Connectivity check (diagnostic, but fatal if unauthorized)
     try:
         log("Performing Home Assistant connectivity check")
-        resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS, timeout=5)
+        resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS_SUPERVISOR, timeout=5)
         log(f"HA connectivity check status: {resp.status_code}")
         if resp.status_code != 200:
             log(f"HA response body: {resp.text}")
@@ -67,6 +73,7 @@ def root():
         "status": "running",
         "session_id": SESSION_ID,
         "supervisor_token_present": bool(SUPERVISOR_TOKEN),
+        "ha_token_present": bool(HA_TOKEN),
     }
 
 # -------------------------------------------------------------------
@@ -75,7 +82,7 @@ def root():
 @app.get("/api/overview")
 def overview():
     try:
-        resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS, timeout=5)
+        resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS_SUPERVISOR, timeout=5)
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
@@ -105,7 +112,7 @@ def overview():
 @app.get("/api/entities")
 def entities():
     try:
-        resp = requests.get(f"{HA_API_BASE}/states", headers=HEADERS, timeout=10)
+        resp = requests.get(f"{HA_API_BASE}/states", headers=HEADERS_SUPERVISOR, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as e:
@@ -114,59 +121,87 @@ def entities():
     return {
         "count": len(data),
         "entities": [
-            {"entity_id": e.get("entity_id"), "state": e.get("state"), "domain": e.get("entity_id", "").split(".")[0]}
+            {
+                "entity_id": e.get("entity_id"),
+                "state": e.get("state"),
+                "domain": e.get("entity_id", "").split(".")[0],
+            }
             for e in data
         ],
     }
 
 # -------------------------------------------------------------------
-# Tasks endpoint
+# Tasks endpoint (stub)
 # -------------------------------------------------------------------
 @app.get("/api/tasks")
 def tasks():
     return []
 
 # -------------------------------------------------------------------
-# Devices & Areas - safe WebSocket fallback
+# Automations endpoint
 # -------------------------------------------------------------------
-async def ha_ws_fetch(endpoint: str):
-    """Fallback to WebSocket API if REST returns 404."""
-    ws_url = os.environ.get("HA_WS_URL", "ws://homeassistant:8123/api/websocket")
-    token = os.environ.get("HA_WS_TOKEN", SUPERVISOR_TOKEN)
+@app.get("/api/automations")
+def automations():
     try:
-        async with websockets.connect(ws_url) as ws:
-            await ws.send(json.dumps({"type": "auth", "access_token": token}))
-            auth_resp = json.loads(await ws.recv())
-            if auth_resp.get("type") != "auth_ok":
-                raise RuntimeError(f"WS auth failed: {auth_resp}")
+        resp = requests.get(f"{HA_BASE}/config/automation/config", headers=HEADERS_HA, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        log(f"Automations fetch failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Error fetching automations: {e}")
 
-            await ws.send(json.dumps({"id": 1, "type": endpoint}))
-            resp = json.loads(await ws.recv())
-            return resp.get("result", [])
-    except Exception as e:
-        log(f"WebSocket fetch failed for {endpoint}: {e}")
+    return {
+        "count": len(data),
+        "automations": data,
+    }
+
+# -------------------------------------------------------------------
+# Devices endpoint
+# -------------------------------------------------------------------
+@app.get("/api/devices")
+def devices():
+    try:
+        resp = requests.get(f"{HA_BASE}/device_registry", headers=HEADERS_HA, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        log(f"Devices fetch failed: {e}")
         return []
 
-@app.get("/api/devices")
-async def devices():
-    try:
-        resp = requests.get(f"{HA_API_BASE}/config/device_registry/list", headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.HTTPError as e:
-        log(f"HTTP error fetching /config/device_registry/list: {e}")
-        # fallback to WS
-        devices_data = await ha_ws_fetch("config/device_registry/list")
-        return devices_data
+    return {
+        "count": len(data),
+        "devices": [
+            {
+                "id": d.get("id"),
+                "name": d.get("name"),
+                "model": d.get("model"),
+                "manufacturer": d.get("manufacturer"),
+            }
+            for d in data
+        ],
+    }
 
+# -------------------------------------------------------------------
+# Areas endpoint
+# -------------------------------------------------------------------
 @app.get("/api/areas")
-async def areas():
+def areas():
     try:
-        resp = requests.get(f"{HA_API_BASE}/config/area_registry/list", headers=HEADERS, timeout=10)
+        resp = requests.get(f"{HA_BASE}/area_registry", headers=HEADERS_HA, timeout=10)
         resp.raise_for_status()
-        return resp.json()
-    except requests.HTTPError as e:
-        log(f"HTTP error fetching /config/area_registry/list: {e}")
-        # fallback to WS
-        areas_data = await ha_ws_fetch("config/area_registry/list")
-        return areas_data
+        data = resp.json()
+    except requests.RequestException as e:
+        log(f"Areas fetch failed: {e}")
+        return []
+
+    return {
+        "count": len(data),
+        "areas": [
+            {
+                "id": a.get("id"),
+                "name": a.get("name"),
+                "description": a.get("description"),
+            }
+            for a in data
+        ],
+    }
