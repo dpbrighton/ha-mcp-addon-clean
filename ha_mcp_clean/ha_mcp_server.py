@@ -19,18 +19,11 @@ def log(msg: str):
 # Environment + token handling (ADD-ON SAFE)
 # -------------------------------------------------------------------
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
-HA_TOKEN = os.environ.get("HA_TOKEN", "").strip()
 
 HA_API_BASE = "http://supervisor/core/api"
-HA_BASE = "http://homeassistant:8123/api"
 
-HEADERS_SUPERVISOR = {
+HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-    "Content-Type": "application/json",
-}
-
-HEADERS_HA = {
-    "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
 
@@ -40,6 +33,7 @@ HEADERS_HA = {
 @app.on_event("startup")
 def startup_event():
     log("=== MCP STARTUP BEGIN ===")
+
     visible_keys = sorted(os.environ.keys())
     log(f"Environment keys visible: {visible_keys}")
 
@@ -52,12 +46,19 @@ def startup_event():
     # Connectivity check (diagnostic, but fatal if unauthorized)
     try:
         log("Performing Home Assistant connectivity check")
-        resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS_SUPERVISOR, timeout=5)
+        resp = requests.get(
+            f"{HA_API_BASE}/config",
+            headers=HEADERS,
+            timeout=5,
+        )
         log(f"HA connectivity check status: {resp.status_code}")
+
         if resp.status_code != 200:
             log(f"HA response body: {resp.text}")
             raise RuntimeError("Home Assistant API did not return 200 at startup")
+
         log("✅ Home Assistant connectivity confirmed")
+
     except Exception as e:
         log(f"❌ Exception during HA connectivity check: {e}")
         raise
@@ -73,7 +74,6 @@ def root():
         "status": "running",
         "session_id": SESSION_ID,
         "supervisor_token_present": bool(SUPERVISOR_TOKEN),
-        "ha_token_present": bool(HA_TOKEN),
     }
 
 # -------------------------------------------------------------------
@@ -82,11 +82,18 @@ def root():
 @app.get("/api/overview")
 def overview():
     try:
-        resp = requests.get(f"{HA_API_BASE}/config", headers=HEADERS_SUPERVISOR, timeout=5)
+        resp = requests.get(
+            f"{HA_API_BASE}/config",
+            headers=HEADERS,
+            timeout=5,
+        )
         resp.raise_for_status()
         config = resp.json()
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error contacting Home Assistant API: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error contacting Home Assistant API: {e}",
+        )
 
     return {
         "home_assistant": {
@@ -112,11 +119,18 @@ def overview():
 @app.get("/api/entities")
 def entities():
     try:
-        resp = requests.get(f"{HA_API_BASE}/states", headers=HEADERS_SUPERVISOR, timeout=10)
+        resp = requests.get(
+            f"{HA_API_BASE}/states",
+            headers=HEADERS,
+            timeout=10,
+        )
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error fetching entities: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching entities: {e}",
+        )
 
     return {
         "count": len(data),
@@ -138,70 +152,58 @@ def tasks():
     return []
 
 # -------------------------------------------------------------------
-# Automations endpoint
+# Automations endpoint (REST, working version)
 # -------------------------------------------------------------------
 @app.get("/api/automations")
 def automations():
     try:
-        resp = requests.get(f"{HA_BASE}/config/automation/config", headers=HEADERS_HA, timeout=10)
+        resp = requests.get(
+            f"{HA_API_BASE}/config/automation/config",
+            headers=HEADERS,
+            timeout=5,
+        )
         resp.raise_for_status()
         data = resp.json()
+        log(f"Fetched {len(data)} automations")
+        return data
     except requests.RequestException as e:
         log(f"Automations fetch failed: {e}")
         raise HTTPException(status_code=502, detail=f"Error fetching automations: {e}")
 
-    return {
-        "count": len(data),
-        "automations": data,
-    }
-
 # -------------------------------------------------------------------
-# Devices endpoint
+# Devices endpoint (REST, working version)
 # -------------------------------------------------------------------
 @app.get("/api/devices")
 def devices():
     try:
-        resp = requests.get(f"{HA_BASE}/device_registry", headers=HEADERS_HA, timeout=10)
+        resp = requests.get(
+            f"{HA_API_BASE}/config/device_registry/list",
+            headers=HEADERS,
+            timeout=5,
+        )
         resp.raise_for_status()
         data = resp.json()
+        log(f"Fetched {len(data)} devices")
+        return data
     except requests.RequestException as e:
         log(f"Devices fetch failed: {e}")
-        return []
-
-    return {
-        "count": len(data),
-        "devices": [
-            {
-                "id": d.get("id"),
-                "name": d.get("name"),
-                "model": d.get("model"),
-                "manufacturer": d.get("manufacturer"),
-            }
-            for d in data
-        ],
-    }
+        raise HTTPException(status_code=502, detail=f"Error fetching devices: {e}")
 
 # -------------------------------------------------------------------
-# Areas endpoint
+# Areas endpoint (REST, working version)
 # -------------------------------------------------------------------
 @app.get("/api/areas")
 def areas():
     try:
-        resp = requests.get(f"{HA_BASE}/area_registry", headers=HEADERS_HA, timeout=10)
+        resp = requests.get(
+            f"{HA_API_BASE}/config/area_registry/list",
+            headers=HEADERS,
+            timeout=5,
+        )
         resp.raise_for_status()
         data = resp.json()
+        log(f"Fetched {len(data)} areas")
+        return data
     except requests.RequestException as e:
         log(f"Areas fetch failed: {e}")
-        return []
-
-    return {
-        "count": len(data),
-        "areas": [
-            {
-                "id": a.get("id"),
-                "name": a.get("name"),
-                "description": a.get("description"),
-            }
-            for a in data
-        ],
-    }
+        raise HTTPException(status_code=502, detail=f"Error fetching areas: {e}")
