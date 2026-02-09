@@ -1,6 +1,6 @@
-# MCP Server v1.4
-# Added /api/services endpoint
-# No other functionality changed from v1.3
+# MCP Server v1.5
+# Added /api/scripts endpoint
+# No other functionality changed from v1.4
 
 import os
 import json
@@ -214,4 +214,24 @@ def services():
         raise HTTPException(
             status_code=502,
             detail=f"Error fetching services from Home Assistant API: {e}"
+        )
+
+# -----------------------------------------------------------------------------
+# Scripts endpoint (v1.5)
+# -----------------------------------------------------------------------------
+@app.get("/api/scripts")
+def scripts():
+    try:
+        resp = ha_rest_get("/api/states")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to fetch states for scripts")
+        all_states = resp.json()
+        scripts_list = [
+            s for s in all_states if s.get("entity_id", "").startswith("script.")
+        ]
+        return scripts_list
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching scripts from Home Assistant API: {e}"
         )
