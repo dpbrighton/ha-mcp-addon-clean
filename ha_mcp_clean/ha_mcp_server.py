@@ -1,6 +1,6 @@
-# MCP Server v1.3
-# Overview endpoint restored with real Home Assistant environment data
-# No other functionality changed from v1.2
+# MCP Server v1.4
+# Added /api/services endpoint
+# No other functionality changed from v1.3
 
 import os
 import json
@@ -196,3 +196,22 @@ async def areas():
         "count": len(areas),
         "areas": areas,
     }
+
+# -----------------------------------------------------------------------------
+# Services endpoint (v1.4)
+# -----------------------------------------------------------------------------
+@app.get("/api/services")
+def services():
+    try:
+        resp = ha_rest_get("/api/services")
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to fetch services from Home Assistant"
+            )
+        return resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching services from Home Assistant API: {e}"
+        )
