@@ -10,20 +10,17 @@ from fastapi import FastAPI, HTTPException
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
-
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ha-mcp")
 
 # -----------------------------------------------------------------------------
 # FastAPI app
 # -----------------------------------------------------------------------------
-
 app = FastAPI()
 
 # -----------------------------------------------------------------------------
 # Global state (single source of truth)
 # -----------------------------------------------------------------------------
-
 HA_TOKEN: str | None = None
 
 HA_HTTP_BASE = "http://homeassistant:8123"
@@ -32,7 +29,6 @@ HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 # -----------------------------------------------------------------------------
 # Startup: capture token ONCE
 # -----------------------------------------------------------------------------
-
 @app.on_event("startup")
 def startup():
     global HA_TOKEN
@@ -55,7 +51,6 @@ def startup():
 # -----------------------------------------------------------------------------
 # REST helper (uses stored token only)
 # -----------------------------------------------------------------------------
-
 def ha_rest_get(path: str):
     assert HA_TOKEN, "HA_TOKEN not initialised"
 
@@ -64,13 +59,11 @@ def ha_rest_get(path: str):
         headers={"Authorization": f"Bearer {HA_TOKEN}"},
         timeout=10,
     )
-
     return resp
 
 # -----------------------------------------------------------------------------
 # WebSocket helper
 # -----------------------------------------------------------------------------
-
 async def ha_ws_call(command: dict) -> dict:
     """
     Perform a single authenticated Home Assistant WebSocket call
@@ -78,12 +71,10 @@ async def ha_ws_call(command: dict) -> dict:
     assert HA_TOKEN, "HA_TOKEN not initialised"
 
     async with websockets.connect(HA_WS_URL) as ws:
-        # Expect auth_required
         msg = json.loads(await ws.recv())
         if msg.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS message: {msg}")
 
-        # Authenticate
         await ws.send(json.dumps({
             "type": "auth",
             "access_token": HA_TOKEN
@@ -93,7 +84,6 @@ async def ha_ws_call(command: dict) -> dict:
         if auth_reply.get("type") != "auth_ok":
             raise RuntimeError(f"WebSocket auth failed: {auth_reply}")
 
-        # Send command
         await ws.send(json.dumps(command))
 
         while True:
@@ -104,7 +94,6 @@ async def ha_ws_call(command: dict) -> dict:
 # -----------------------------------------------------------------------------
 # WS fetchers (areas + devices)
 # -----------------------------------------------------------------------------
-
 async def fetch_devices_ws():
     result = await ha_ws_call({
         "id": 1,
@@ -122,7 +111,6 @@ async def fetch_areas_ws():
 # -----------------------------------------------------------------------------
 # API endpoints
 # -----------------------------------------------------------------------------
-
 @app.get("/api/overview")
 def overview():
     resp = ha_rest_get("/api/")
@@ -135,17 +123,27 @@ def entities():
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch entities")
+    all_entities = resp.json()
     return {
-        "count": len(resp.json()),
-        "entities": resp.json(),
+        "count": len(all_entities),
+        "entities": all_entities,
     }
 
 @app.get("/api/automations")
 def automations():
-    resp = ha_rest_get("/api/config/automation/config")
+    """
+    Fetch automations from /states using REST and filter by entity_id starting with 'automation.'
+    """
+    resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
-    return resp.json()
+
+    all_states = resp.json()
+    automations_list = [
+        state for state in all_states
+        if state.get("entity_id", "").startswith("automation.")
+    ]
+    return automations_list
 
 @app.get("/api/devices")
 async def devices():
@@ -165,4 +163,5 @@ async def areas():
 
 @app.get("/api/tasks")
 def tasks():
+    # Placeholder for now
     return []
