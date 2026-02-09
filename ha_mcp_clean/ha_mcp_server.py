@@ -1,3 +1,7 @@
+# MCP Server v1.2
+# Baseline: Overview, Entities, Devices, Areas, Automations (stable)
+# Tasks endpoint implemented (REST), stub replaced
+
 import os
 import json
 import logging
@@ -22,6 +26,7 @@ app = FastAPI(title="Home Assistant MCP Server")
 # Global state (single source of truth)
 # -----------------------------------------------------------------------------
 HA_TOKEN: str | None = None
+
 HA_HTTP_BASE = "http://homeassistant:8123"
 HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 
@@ -31,6 +36,7 @@ HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 @app.on_event("startup")
 def startup():
     global HA_TOKEN
+
     log.info("=== MCP STARTUP BEGIN ===")
     log.info("Environment keys visible: %s", list(os.environ.keys()))
 
@@ -51,6 +57,7 @@ def startup():
 # -----------------------------------------------------------------------------
 def ha_rest_get(path: str):
     assert HA_TOKEN, "HA_TOKEN not initialised"
+
     resp = requests.get(
         f"{HA_HTTP_BASE}{path}",
         headers={"Authorization": f"Bearer {HA_TOKEN}"},
@@ -63,6 +70,7 @@ def ha_rest_get(path: str):
 # -----------------------------------------------------------------------------
 async def ha_ws_call(command: dict) -> dict:
     assert HA_TOKEN, "HA_TOKEN not initialised"
+
     async with websockets.connect(HA_WS_URL) as ws:
         msg = json.loads(await ws.recv())
         if msg.get("type") != "auth_required":
@@ -85,7 +93,7 @@ async def ha_ws_call(command: dict) -> dict:
                 return reply
 
 # -----------------------------------------------------------------------------
-# WS fetchers (areas + devices)
+# WS fetchers (devices + areas)
 # -----------------------------------------------------------------------------
 async def fetch_devices_ws():
     result = await ha_ws_call({
@@ -106,50 +114,30 @@ async def fetch_areas_ws():
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
-    try:
-        resp = ha_rest_get("/api/config")
-        resp.raise_for_status()
-        config = resp.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch overview: {e}")
-
-    return {
-        "home_assistant": {
-            "version": config.get("version"),
-            "location_name": config.get("name"),
-            "time_zone": config.get("time_zone"),
-            "unit_system": config.get("unit_system"),
-            "installation_type": "homeassistant_os",
-        },
-        "counts": {
-            "areas": 0,
-            "devices": 0,
-            "entities": 0,
-            "automations": 0,
-            "scripts": 0,
-            "dashboards": 0,
-        },
-    }
+    resp = ha_rest_get("/api/")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Home Assistant REST unavailable")
+    return resp.json()
 
 @app.get("/api/entities")
 def entities():
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch entities")
-    data = resp.json()
     return {
-        "count": len(data),
-        "entities": data,
+        "count": len(resp.json()),
+        "entities": resp.json(),
     }
 
 @app.get("/api/automations")
 def automations():
-    """Fetch all entities and return only automations (working previous method)"""
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
     all_states = resp.json()
-    automations_list = [s for s in all_states if s.get("entity_id", "").startswith("automation.")]
+    automations_list = [
+        state for state in all_states if state.get("entity_id", "").startswith("automation.")
+    ]
     return automations_list
 
 @app.get("/api/devices")
@@ -168,6 +156,20 @@ async def areas():
         "areas": areas,
     }
 
+# -----------------------------------------------------------------------------
+# Tasks endpoint (v1.2)
+# -----------------------------------------------------------------------------
 @app.get("/api/tasks")
 def tasks():
-    return []
+    try:
+        resp = ha_rest_get("/api/services/task")
+        if resp.status_code == 404:
+            # Home Assistant does not have tasks configured; return empty list
+            return []
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error fetching tasks from Home Assistant API: {e}"
+        )
