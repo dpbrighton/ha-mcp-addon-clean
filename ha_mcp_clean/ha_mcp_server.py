@@ -1,6 +1,6 @@
-# MCP Server v1.5
-# Added /api/scripts endpoint
-# No other functionality changed from v1.4
+# MCP Server v1.6
+# Added /api/dashboards endpoint
+# No other functionality changed from v1.5
 
 import os
 import json
@@ -114,7 +114,6 @@ async def fetch_areas_ws():
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
-    # Fetch core Home Assistant config
     resp = ha_rest_get("/api/config")
     if resp.status_code != 200:
         raise HTTPException(
@@ -124,7 +123,6 @@ def overview():
 
     config = resp.json()
 
-    # Fetch all states once for counts
     states_resp = ha_rest_get("/api/states")
     if states_resp.status_code != 200:
         raise HTTPException(
@@ -133,14 +131,9 @@ def overview():
         )
 
     states = states_resp.json()
-
     entity_count = len(states)
-    automation_count = len(
-        [s for s in states if s.get("entity_id", "").startswith("automation.")]
-    )
-    script_count = len(
-        [s for s in states if s.get("entity_id", "").startswith("script.")]
-    )
+    automation_count = len([s for s in states if s.get("entity_id", "").startswith("automation.")])
+    script_count = len([s for s in states if s.get("entity_id", "").startswith("script.")])
 
     return {
         "home_assistant": {
@@ -176,9 +169,7 @@ def automations():
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
     all_states = resp.json()
-    automations_list = [
-        state for state in all_states if state.get("entity_id", "").startswith("automation.")
-    ]
+    automations_list = [s for s in all_states if s.get("entity_id", "").startswith("automation.")]
     return automations_list
 
 @app.get("/api/devices")
@@ -205,16 +196,10 @@ def services():
     try:
         resp = ha_rest_get("/api/services")
         if resp.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail="Failed to fetch services from Home Assistant"
-            )
+            raise HTTPException(status_code=502, detail="Failed to fetch services from Home Assistant")
         return resp.json()
     except requests.RequestException as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Error fetching services from Home Assistant API: {e}"
-        )
+        raise HTTPException(status_code=502, detail=f"Error fetching services from Home Assistant API: {e}")
 
 # -----------------------------------------------------------------------------
 # Scripts endpoint (v1.5)
@@ -226,12 +211,26 @@ def scripts():
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to fetch states for scripts")
         all_states = resp.json()
-        scripts_list = [
-            s for s in all_states if s.get("entity_id", "").startswith("script.")
-        ]
+        scripts_list = [s for s in all_states if s.get("entity_id", "").startswith("script.")]
         return scripts_list
     except requests.RequestException as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Error fetching scripts from Home Assistant API: {e}"
-        )
+        raise HTTPException(status_code=502, detail=f"Error fetching scripts from Home Assistant API: {e}")
+
+# -----------------------------------------------------------------------------
+# Dashboards endpoint (v1.6)
+# -----------------------------------------------------------------------------
+@app.get("/api/dashboards")
+def dashboards():
+    try:
+        resp = ha_rest_get("/api/lovelace/config")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to fetch dashboards from Home Assistant")
+        data = resp.json()
+        # Return basic dashboard info
+        return {
+            "title": data.get("title"),
+            "mode": data.get("mode"),
+            "views": data.get("views", [])
+        }
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Error fetching dashboards from Home Assistant API: {e}")
