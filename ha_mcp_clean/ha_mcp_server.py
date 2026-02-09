@@ -59,22 +59,22 @@ def ha_rest_get(path: str):
         headers={"Authorization": f"Bearer {HA_TOKEN}"},
         timeout=10,
     )
+
     return resp
 
 # -----------------------------------------------------------------------------
 # WebSocket helper
 # -----------------------------------------------------------------------------
 async def ha_ws_call(command: dict) -> dict:
-    """
-    Perform a single authenticated Home Assistant WebSocket call
-    """
     assert HA_TOKEN, "HA_TOKEN not initialised"
 
     async with websockets.connect(HA_WS_URL) as ws:
+        # Expect auth_required
         msg = json.loads(await ws.recv())
         if msg.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS message: {msg}")
 
+        # Authenticate
         await ws.send(json.dumps({
             "type": "auth",
             "access_token": HA_TOKEN
@@ -84,6 +84,7 @@ async def ha_ws_call(command: dict) -> dict:
         if auth_reply.get("type") != "auth_ok":
             raise RuntimeError(f"WebSocket auth failed: {auth_reply}")
 
+        # Send command
         await ws.send(json.dumps(command))
 
         while True:
@@ -113,37 +114,44 @@ async def fetch_areas_ws():
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
-    resp = ha_rest_get("/api/")
+    resp = ha_rest_get("/api/config")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Home Assistant REST unavailable")
-    return resp.json()
+    config = resp.json()
+    return {
+        "home_assistant": {
+            "version": config.get("version"),
+            "location_name": config.get("name"),
+            "time_zone": config.get("time_zone"),
+            "unit_system": config.get("unit_system"),
+            "installation_type": "homeassistant_os",
+        },
+        "counts": {
+            "areas": 0,
+            "devices": 0,
+            "entities": 0,
+            "automations": 0,
+            "scripts": 0,
+            "dashboards": 0,
+        },
+    }
 
 @app.get("/api/entities")
 def entities():
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch entities")
-    all_entities = resp.json()
     return {
-        "count": len(all_entities),
-        "entities": all_entities,
+        "count": len(resp.json()),
+        "entities": resp.json(),
     }
 
 @app.get("/api/automations")
 def automations():
-    """
-    Fetch automations from /states using REST and filter by entity_id starting with 'automation.'
-    """
-    resp = ha_rest_get("/api/states")
+    resp = ha_rest_get("/api/config/automation/config")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
-
-    all_states = resp.json()
-    automations_list = [
-        state for state in all_states
-        if state.get("entity_id", "").startswith("automation.")
-    ]
-    return automations_list
+    return resp.json()
 
 @app.get("/api/devices")
 async def devices():
@@ -163,5 +171,4 @@ async def areas():
 
 @app.get("/api/tasks")
 def tasks():
-    # Placeholder for now
     return []
