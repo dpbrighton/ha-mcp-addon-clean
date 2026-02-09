@@ -16,13 +16,12 @@ log = logging.getLogger("ha-mcp")
 # -----------------------------------------------------------------------------
 # FastAPI app
 # -----------------------------------------------------------------------------
-app = FastAPI()
+app = FastAPI(title="Home Assistant MCP Server")
 
 # -----------------------------------------------------------------------------
 # Global state (single source of truth)
 # -----------------------------------------------------------------------------
 HA_TOKEN: str | None = None
-
 HA_HTTP_BASE = "http://homeassistant:8123"
 HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 
@@ -32,7 +31,6 @@ HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 @app.on_event("startup")
 def startup():
     global HA_TOKEN
-
     log.info("=== MCP STARTUP BEGIN ===")
     log.info("Environment keys visible: %s", list(os.environ.keys()))
 
@@ -53,13 +51,11 @@ def startup():
 # -----------------------------------------------------------------------------
 def ha_rest_get(path: str):
     assert HA_TOKEN, "HA_TOKEN not initialised"
-
     resp = requests.get(
         f"{HA_HTTP_BASE}{path}",
         headers={"Authorization": f"Bearer {HA_TOKEN}"},
         timeout=10,
     )
-
     return resp
 
 # -----------------------------------------------------------------------------
@@ -67,14 +63,11 @@ def ha_rest_get(path: str):
 # -----------------------------------------------------------------------------
 async def ha_ws_call(command: dict) -> dict:
     assert HA_TOKEN, "HA_TOKEN not initialised"
-
     async with websockets.connect(HA_WS_URL) as ws:
-        # Expect auth_required
         msg = json.loads(await ws.recv())
         if msg.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS message: {msg}")
 
-        # Authenticate
         await ws.send(json.dumps({
             "type": "auth",
             "access_token": HA_TOKEN
@@ -84,7 +77,6 @@ async def ha_ws_call(command: dict) -> dict:
         if auth_reply.get("type") != "auth_ok":
             raise RuntimeError(f"WebSocket auth failed: {auth_reply}")
 
-        # Send command
         await ws.send(json.dumps(command))
 
         while True:
@@ -114,10 +106,13 @@ async def fetch_areas_ws():
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
-    resp = ha_rest_get("/api/config")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Home Assistant REST unavailable")
-    config = resp.json()
+    try:
+        resp = ha_rest_get("/api/config")
+        resp.raise_for_status()
+        config = resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch overview: {e}")
+
     return {
         "home_assistant": {
             "version": config.get("version"),
@@ -141,17 +136,21 @@ def entities():
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch entities")
+    data = resp.json()
     return {
-        "count": len(resp.json()),
-        "entities": resp.json(),
+        "count": len(data),
+        "entities": data,
     }
 
 @app.get("/api/automations")
 def automations():
-    resp = ha_rest_get("/api/config/automation/config")
+    """Fetch all entities and return only automations (working previous method)"""
+    resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
-    return resp.json()
+    all_states = resp.json()
+    automations_list = [s for s in all_states if s.get("entity_id", "").startswith("automation.")]
+    return automations_list
 
 @app.get("/api/devices")
 async def devices():
