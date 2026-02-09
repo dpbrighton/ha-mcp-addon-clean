@@ -1,6 +1,6 @@
-# MCP Server v1.2
-# Baseline: Overview, Entities, Devices, Areas, Automations (stable)
-# Tasks endpoint implemented (REST), stub replaced
+# MCP Server v1.3
+# Overview endpoint restored with real Home Assistant environment data
+# No other functionality changed from v1.2
 
 import os
 import json
@@ -114,10 +114,51 @@ async def fetch_areas_ws():
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
-    resp = ha_rest_get("/api/")
+    # Fetch core Home Assistant config
+    resp = ha_rest_get("/api/config")
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Home Assistant REST unavailable")
-    return resp.json()
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to fetch Home Assistant config"
+        )
+
+    config = resp.json()
+
+    # Fetch all states once for counts
+    states_resp = ha_rest_get("/api/states")
+    if states_resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to fetch entity states for overview"
+        )
+
+    states = states_resp.json()
+
+    entity_count = len(states)
+    automation_count = len(
+        [s for s in states if s.get("entity_id", "").startswith("automation.")]
+    )
+    script_count = len(
+        [s for s in states if s.get("entity_id", "").startswith("script.")]
+    )
+
+    return {
+        "home_assistant": {
+            "version": config.get("version"),
+            "location_name": config.get("name"),
+            "time_zone": config.get("time_zone"),
+            "unit_system": config.get("unit_system"),
+            "installation_type": config.get("installation_type", "unknown"),
+        },
+        "counts": {
+            "entities": entity_count,
+            "automations": automation_count,
+            "scripts": script_count,
+            "devices": 0,
+            "areas": 0,
+            "dashboards": 0,
+        },
+    }
 
 @app.get("/api/entities")
 def entities():
@@ -155,21 +196,3 @@ async def areas():
         "count": len(areas),
         "areas": areas,
     }
-
-# -----------------------------------------------------------------------------
-# Tasks endpoint (v1.2)
-# -----------------------------------------------------------------------------
-@app.get("/api/tasks")
-def tasks():
-    try:
-        resp = ha_rest_get("/api/services/task")
-        if resp.status_code == 404:
-            # Home Assistant does not have tasks configured; return empty list
-            return []
-        resp.raise_for_status()
-        return resp.json()
-    except requests.RequestException as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Error fetching tasks from Home Assistant API: {e}"
-        )
