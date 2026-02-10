@@ -1,7 +1,6 @@
-# MCP Server v1.9.1
+# MCP Server v1.9.2
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
-# Dashboards endpoint now uses WebSocket (full Lovelace configs, read-only)
-# No other endpoints altered
+# Dashboards endpoint now robust: WS with fallback REST for default dashboard
 
 import os
 import json
@@ -86,53 +85,37 @@ async def ha_ws_call(command: dict) -> dict:
 # WS fetchers
 # -----------------------------------------------------------------------------
 async def fetch_devices_ws():
-    result = await ha_ws_call({
-        "id": 1,
-        "type": "config/device_registry/list",
-    })
+    result = await ha_ws_call({"id": 1, "type": "config/device_registry/list"})
     return result.get("result", [])
 
 async def fetch_areas_ws():
-    result = await ha_ws_call({
-        "id": 2,
-        "type": "config/area_registry/list",
-    })
+    result = await ha_ws_call({"id": 2, "type": "config/area_registry/list"})
     return result.get("result", [])
 
 async def fetch_events_ws():
-    result = await ha_ws_call({
-        "id": 3,
-        "type": "get_event_types",
-    })
+    result = await ha_ws_call({"id": 3, "type": "get_event_types"})
     return result.get("result", [])
 
 async def fetch_dashboards_ws():
     """
-    Fetch all dashboards via WebSocket. Handles:
-      - main Lovelace dashboard
-      - additional dashboards if present
-      - full config for views, cards, custom cards
+    Fetch all dashboards via WebSocket with proper IDs.
+    If default dashboard fails, fall back to REST.
     """
     dashboards_out = []
 
-    # Fetch main dashboard (default "lovelace")
     try:
-        main_config = await ha_ws_call({"id": 100, "type": "lovelace/config"})
-        dashboards_out.append({
-            "id": "lovelace",
-            "title": main_config.get("title", "Home"),
-            "mode": "storage",
-            "config": main_config
-        })
+        # Step 1: get all dashboard metadata (IDs)
+        meta_resp = await ha_ws_call({"id": 200, "type": "lovelace/dashboards"})
+        dashboards_meta = meta_resp.get("result", {})
     except Exception as e:
-        log.warning("Failed to fetch main Lovelace dashboard via WS: %s", e)
+        log.warning("Failed to fetch dashboard metadata via WS: %s", e)
+        dashboards_meta = {}
 
-    # Attempt to fetch additional dashboards if they exist
-    dashboards_meta = main_config.get("dashboards", {}) if main_config else {}
+    # Step 2: fetch each dashboard config via WS
     for dashboard_id, meta in dashboards_meta.items():
         try:
-            dash_config = await ha_ws_call({
-                "id": 101,
+            dash_resp = await ha_ws_call({
+                "id": 201,
                 "type": "lovelace/config",
                 "dashboard_id": dashboard_id
             })
@@ -140,15 +123,31 @@ async def fetch_dashboards_ws():
                 "id": dashboard_id,
                 "title": meta.get("title", dashboard_id),
                 "mode": meta.get("mode", "storage"),
-                "config": dash_config
+                "config": dash_resp
             })
         except Exception as e:
             log.warning("Failed to fetch dashboard %s via WS: %s", dashboard_id, e)
 
+    # Step 3: fallback for default dashboard if none returned
+    if "lovelace" not in [d["id"] for d in dashboards_out]:
+        try:
+            resp = ha_rest_get("/api/lovelace/config")
+            if resp.status_code == 200:
+                dashboards_out.insert(0, {
+                    "id": "lovelace",
+                    "title": resp.json().get("title", "Home"),
+                    "mode": "storage",
+                    "config": resp.json()
+                })
+            else:
+                log.warning("REST fallback for default dashboard failed: %s", resp.status_code)
+        except Exception as e:
+            log.warning("REST fallback for default dashboard failed: %s", e)
+
     return dashboards_out
 
 # -----------------------------------------------------------------------------
-# API endpoints
+# Core API endpoints
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
@@ -218,7 +217,7 @@ def timers():
     return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.1, WS)
+# Dashboards endpoint (v1.9.2, WS + REST fallback)
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
 async def dashboards():
@@ -226,4 +225,4 @@ async def dashboards():
         dashboards_list = await fetch_dashboards_ws()
         return {"count": len(dashboards_list), "dashboards": dashboards_list}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch dashboards via WS: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch dashboards: {e}")
