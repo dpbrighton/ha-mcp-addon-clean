@@ -1,6 +1,6 @@
-# MCP Server v1.8
-# Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events
-# Added: Timers endpoint (REST, read-only)
+# MCP Server v1.9
+# Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
+# Added: Dashboards endpoint (full Lovelace configs, storage mode, read-only)
 
 import os
 import json
@@ -60,7 +60,7 @@ def ha_rest_get(path: str):
     resp = requests.get(
         f"{HA_HTTP_BASE}{path}",
         headers={"Authorization": f"Bearer {HA_TOKEN}"},
-        timeout=10,
+        timeout=15,
     )
     return resp
 
@@ -116,7 +116,7 @@ async def fetch_events_ws():
     return result.get("result", [])
 
 # -----------------------------------------------------------------------------
-# API endpoints
+# Core API endpoints
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
@@ -197,9 +197,6 @@ async def events():
         "events": sorted(events),
     }
 
-# -----------------------------------------------------------------------------
-# Timers endpoint (v1.8)
-# -----------------------------------------------------------------------------
 @app.get("/api/timers")
 def timers():
     resp = ha_rest_get("/api/states")
@@ -214,4 +211,50 @@ def timers():
     return {
         "count": len(timers),
         "timers": timers,
+    }
+
+# -----------------------------------------------------------------------------
+# Dashboards endpoint (v1.9)
+# -----------------------------------------------------------------------------
+@app.get("/api/dashboards")
+def dashboards():
+    # Step 1: fetch main Lovelace config (dashboard list)
+    resp = ha_rest_get("/api/lovelace/config")
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to fetch Lovelace dashboard list"
+        )
+
+    root_config = resp.json()
+
+    dashboards_out = []
+
+    # Default dashboard ("lovelace")
+    dashboards_out.append({
+        "id": "lovelace",
+        "title": root_config.get("title", "Home"),
+        "mode": "storage",
+        "config": root_config,
+    })
+
+    # Step 2: fetch additional dashboards, if any
+    dashboards_meta = root_config.get("dashboards", {})
+
+    for dashboard_id, meta in dashboards_meta.items():
+        dash_resp = ha_rest_get(f"/api/lovelace/config/{dashboard_id}")
+        if dash_resp.status_code != 200:
+            log.warning("Failed to fetch dashboard %s", dashboard_id)
+            continue
+
+        dashboards_out.append({
+            "id": dashboard_id,
+            "title": meta.get("title", dashboard_id),
+            "mode": meta.get("mode", "storage"),
+            "config": dash_resp.json(),
+        })
+
+    return {
+        "count": len(dashboards_out),
+        "dashboards": dashboards_out,
     }
