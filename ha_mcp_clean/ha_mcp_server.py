@@ -1,7 +1,7 @@
-# MCP Server v1.9.5
+# MCP Server v1.9.6
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
 # Dashboards endpoint: WS fetch + .storage fallback
-# Version: 1.9.5
+# Version: 1.9.6
 
 import os
 import json
@@ -31,8 +31,11 @@ HA_TOKEN: str | None = None
 HA_HTTP_BASE = "http://homeassistant:8123"
 HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 
-# v1.9.5 CHANGE: correct Home Assistant storage path
-CONFIG_STORAGE_PATH = "/homeassistant/.storage"
+# v1.9.6 CHANGE: make storage path configurable, default to add-on mount
+CONFIG_STORAGE_PATH = os.getenv(
+    "HA_STORAGE_PATH",
+    "/config/.storage"
+)
 
 # -----------------------------------------------------------------------------
 # Startup: capture token ONCE
@@ -50,6 +53,7 @@ def startup():
     if not HA_TOKEN:
         raise RuntimeError("No Home Assistant token found in environment")
     log.info("✅ Home Assistant token captured and stored")
+    log.info("Using HA storage path: %s", CONFIG_STORAGE_PATH)
     log.info("=== MCP STARTUP COMPLETE ===")
 
 # -----------------------------------------------------------------------------
@@ -129,7 +133,7 @@ async def fetch_dashboards_ws():
 
 def fetch_dashboards_from_storage():
     """
-    Fallback: read all Lovelace dashboard files from /homeassistant/.storage/
+    Fallback: read all Lovelace dashboard files from configured .storage path
     """
     dashboards_out = []
     path = Path(CONFIG_STORAGE_PATH)
@@ -222,7 +226,7 @@ def timers():
     return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.5)
+# Dashboards endpoint (v1.9.6)
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
 async def dashboards():
