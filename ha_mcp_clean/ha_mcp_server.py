@@ -1,6 +1,7 @@
-# MCP Server v1.9.2
+# MCP Server v1.9.3
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
-# Dashboards endpoint now robust: WS with fallback REST for default dashboard
+# Dashboards endpoint: robust WS fetching for all dashboard IDs with REST fallback
+# Version: 1.9.3
 
 import os
 import json
@@ -23,7 +24,7 @@ log = logging.getLogger("ha-mcp")
 app = FastAPI(title="Home Assistant MCP Server")
 
 # -----------------------------------------------------------------------------
-# Global state (single source of truth)
+# Global state
 # -----------------------------------------------------------------------------
 HA_TOKEN: str | None = None
 HA_HTTP_BASE = "http://homeassistant:8123"
@@ -98,20 +99,21 @@ async def fetch_events_ws():
 
 async def fetch_dashboards_ws():
     """
-    Fetch all dashboards via WebSocket with proper IDs.
-    If default dashboard fails, fall back to REST.
+    Fetch all dashboards via WebSocket with correct dashboard IDs.
+    Uses LLT stored in HA_TOKEN local variable.
+    REST fallback for default dashboard if WS fails.
     """
     dashboards_out = []
 
+    # Step 1: fetch all dashboard IDs
     try:
-        # Step 1: get all dashboard metadata (IDs)
         meta_resp = await ha_ws_call({"id": 200, "type": "lovelace/dashboards"})
         dashboards_meta = meta_resp.get("result", {})
     except Exception as e:
         log.warning("Failed to fetch dashboard metadata via WS: %s", e)
         dashboards_meta = {}
 
-    # Step 2: fetch each dashboard config via WS
+    # Step 2: fetch each dashboard config using its dashboard_id
     for dashboard_id, meta in dashboards_meta.items():
         try:
             dash_resp = await ha_ws_call({
@@ -128,7 +130,7 @@ async def fetch_dashboards_ws():
         except Exception as e:
             log.warning("Failed to fetch dashboard %s via WS: %s", dashboard_id, e)
 
-    # Step 3: fallback for default dashboard if none returned
+    # Step 3: fallback for default dashboard "lovelace" if missing
     if "lovelace" not in [d["id"] for d in dashboards_out]:
         try:
             resp = ha_rest_get("/api/lovelace/config")
@@ -217,7 +219,7 @@ def timers():
     return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.2, WS + REST fallback)
+# Dashboards endpoint (v1.9.3, WS + REST fallback)
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
 async def dashboards():
