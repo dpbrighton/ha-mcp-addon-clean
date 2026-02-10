@@ -32,3 +32,5 @@ host_network: true
 
 # 🔑 THIS IS THE CRITICAL LINE
 homeassistant_api: true
+map:
+  - homeassistant:rw
