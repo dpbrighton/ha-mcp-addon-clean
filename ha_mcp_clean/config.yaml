@@ -21,6 +21,7 @@ schema:
 
 environment:
   HA_TOKEN: "${ha_token}"
+  HA_STORAGE_PATH: "/config/.storage"  # <-- v1.9.6 addition
 
 ports:
   8000/tcp: 8000
@@ -32,5 +33,6 @@ host_network: true
 
 # 🔑 THIS IS THE CRITICAL LINE
 homeassistant_api: true
+
 map:
   - homeassistant:rw
