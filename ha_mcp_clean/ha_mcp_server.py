@@ -1,13 +1,12 @@
-# MCP Server v1.7
-# Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations
-# Added: Events endpoint (WebSocket, read-only)
+# MCP Server v1.8
+# Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events
+# Added: Timers endpoint (REST, read-only)
 
 import os
 import json
 import logging
 import requests
 import websockets
-import asyncio
 
 from fastapi import FastAPI, HTTPException
 
@@ -53,7 +52,7 @@ def startup():
     log.info("=== MCP STARTUP COMPLETE ===")
 
 # -----------------------------------------------------------------------------
-# REST helper (uses stored token only)
+# REST helper
 # -----------------------------------------------------------------------------
 def ha_rest_get(path: str):
     assert HA_TOKEN, "HA_TOKEN not initialised"
@@ -190,19 +189,29 @@ async def areas():
         "areas": areas,
     }
 
-# -----------------------------------------------------------------------------
-# Events endpoint (v1.7)
-# -----------------------------------------------------------------------------
 @app.get("/api/events")
 async def events():
-    try:
-        events = await fetch_events_ws()
-        return {
-            "count": len(events),
-            "events": sorted(events),
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to fetch event types: {e}"
-        )
+    events = await fetch_events_ws()
+    return {
+        "count": len(events),
+        "events": sorted(events),
+    }
+
+# -----------------------------------------------------------------------------
+# Timers endpoint (v1.8)
+# -----------------------------------------------------------------------------
+@app.get("/api/timers")
+def timers():
+    resp = ha_rest_get("/api/states")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to fetch timers")
+
+    timers = [
+        s for s in resp.json()
+        if s.get("entity_id", "").startswith("timer.")
+    ]
+
+    return {
+        "count": len(timers),
+        "timers": timers,
+    }
