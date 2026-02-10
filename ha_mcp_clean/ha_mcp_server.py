@@ -1,6 +1,6 @@
-# MCP Server v1.6
-# Added /api/dashboards endpoint
-# No other functionality changed from v1.5
+# MCP Server v1.7
+# Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations
+# Added: Events endpoint (WebSocket, read-only)
 
 import os
 import json
@@ -93,7 +93,7 @@ async def ha_ws_call(command: dict) -> dict:
                 return reply
 
 # -----------------------------------------------------------------------------
-# WS fetchers (devices + areas)
+# WS fetchers
 # -----------------------------------------------------------------------------
 async def fetch_devices_ws():
     result = await ha_ws_call({
@@ -109,6 +109,13 @@ async def fetch_areas_ws():
     })
     return result.get("result", [])
 
+async def fetch_events_ws():
+    result = await ha_ws_call({
+        "id": 3,
+        "type": "get_event_types",
+    })
+    return result.get("result", [])
+
 # -----------------------------------------------------------------------------
 # API endpoints
 # -----------------------------------------------------------------------------
@@ -116,24 +123,9 @@ async def fetch_areas_ws():
 def overview():
     resp = ha_rest_get("/api/config")
     if resp.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to fetch Home Assistant config"
-        )
+        raise HTTPException(status_code=502, detail="Failed to fetch overview data")
 
     config = resp.json()
-
-    states_resp = ha_rest_get("/api/states")
-    if states_resp.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to fetch entity states for overview"
-        )
-
-    states = states_resp.json()
-    entity_count = len(states)
-    automation_count = len([s for s in states if s.get("entity_id", "").startswith("automation.")])
-    script_count = len([s for s in states if s.get("entity_id", "").startswith("script.")])
 
     return {
         "home_assistant": {
@@ -141,16 +133,8 @@ def overview():
             "location_name": config.get("name"),
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
-            "installation_type": config.get("installation_type", "unknown"),
-        },
-        "counts": {
-            "entities": entity_count,
-            "automations": automation_count,
-            "scripts": script_count,
-            "devices": 0,
-            "areas": 0,
-            "dashboards": 0,
-        },
+            "installation_type": config.get("installation_type"),
+        }
     }
 
 @app.get("/api/entities")
@@ -168,9 +152,27 @@ def automations():
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
-    all_states = resp.json()
-    automations_list = [s for s in all_states if s.get("entity_id", "").startswith("automation.")]
-    return automations_list
+    return [
+        s for s in resp.json()
+        if s.get("entity_id", "").startswith("automation.")
+    ]
+
+@app.get("/api/scripts")
+def scripts():
+    resp = ha_rest_get("/api/states")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to fetch scripts")
+    return [
+        s for s in resp.json()
+        if s.get("entity_id", "").startswith("script.")
+    ]
+
+@app.get("/api/services")
+def services():
+    resp = ha_rest_get("/api/services")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to fetch services")
+    return resp.json()
 
 @app.get("/api/devices")
 async def devices():
@@ -189,48 +191,18 @@ async def areas():
     }
 
 # -----------------------------------------------------------------------------
-# Services endpoint (v1.4)
+# Events endpoint (v1.7)
 # -----------------------------------------------------------------------------
-@app.get("/api/services")
-def services():
+@app.get("/api/events")
+async def events():
     try:
-        resp = ha_rest_get("/api/services")
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail="Failed to fetch services from Home Assistant")
-        return resp.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error fetching services from Home Assistant API: {e}")
-
-# -----------------------------------------------------------------------------
-# Scripts endpoint (v1.5)
-# -----------------------------------------------------------------------------
-@app.get("/api/scripts")
-def scripts():
-    try:
-        resp = ha_rest_get("/api/states")
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail="Failed to fetch states for scripts")
-        all_states = resp.json()
-        scripts_list = [s for s in all_states if s.get("entity_id", "").startswith("script.")]
-        return scripts_list
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error fetching scripts from Home Assistant API: {e}")
-
-# -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.6)
-# -----------------------------------------------------------------------------
-@app.get("/api/dashboards")
-def dashboards():
-    try:
-        resp = ha_rest_get("/api/lovelace/config")
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail="Failed to fetch dashboards from Home Assistant")
-        data = resp.json()
-        # Return basic dashboard info
+        events = await fetch_events_ws()
         return {
-            "title": data.get("title"),
-            "mode": data.get("mode"),
-            "views": data.get("views", [])
+            "count": len(events),
+            "events": sorted(events),
         }
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Error fetching dashboards from Home Assistant API: {e}")
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch event types: {e}"
+        )
