@@ -1,7 +1,7 @@
-# MCP Server v1.9.4
+# MCP Server v1.9.5
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
 # Dashboards endpoint: WS fetch + .storage fallback
-# Version: 1.9.4
+# Version: 1.9.5
 
 import os
 import json
@@ -30,7 +30,9 @@ app = FastAPI(title="Home Assistant MCP Server")
 HA_TOKEN: str | None = None
 HA_HTTP_BASE = "http://homeassistant:8123"
 HA_WS_URL = "ws://homeassistant:8123/api/websocket"
-CONFIG_STORAGE_PATH = "/config/.storage"  # Add-on container path to .storage
+
+# v1.9.5 CHANGE: correct Home Assistant storage path
+CONFIG_STORAGE_PATH = "/homeassistant/.storage"
 
 # -----------------------------------------------------------------------------
 # Startup: capture token ONCE
@@ -111,7 +113,9 @@ async def fetch_dashboards_ws():
 
     for dashboard_id, meta in dashboards_meta.items():
         try:
-            dash_resp = await ha_ws_call({"id": 201, "type": "lovelace/config", "dashboard_id": dashboard_id})
+            dash_resp = await ha_ws_call(
+                {"id": 201, "type": "lovelace/config", "dashboard_id": dashboard_id}
+            )
             dashboards_out.append({
                 "id": dashboard_id,
                 "title": meta.get("title", dashboard_id),
@@ -125,7 +129,7 @@ async def fetch_dashboards_ws():
 
 def fetch_dashboards_from_storage():
     """
-    Fallback: read all Lovelace dashboard files from /config/.storage/
+    Fallback: read all Lovelace dashboard files from /homeassistant/.storage/
     """
     dashboards_out = []
     path = Path(CONFIG_STORAGE_PATH)
@@ -218,14 +222,13 @@ def timers():
     return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.4, WS + storage fallback)
+# Dashboards endpoint (v1.9.5)
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
 async def dashboards():
     try:
         dashboards_list = await fetch_dashboards_ws()
         if not dashboards_list:
-            # WS returned nothing, fallback to .storage files
             dashboards_list = fetch_dashboards_from_storage()
         return {"count": len(dashboards_list), "dashboards": dashboards_list}
     except Exception as e:
