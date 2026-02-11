@@ -1,7 +1,7 @@
 name: Home Assistant MCP Server
 slug: ha_mcp_clean
 description: MCP server for Home Assistant
-version: "1.0.0"
+version: "1.0.1"
 
 startup: application
 boot: auto
@@ -31,9 +31,6 @@ ports_description:
 host_network: true
 
 homeassistant_api: true
-
-# ✅ ADD THIS LINE
-homeassistant: true
 
 map:
   - homeassistant:rw
