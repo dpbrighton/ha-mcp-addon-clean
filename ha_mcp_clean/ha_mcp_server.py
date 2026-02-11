@@ -1,12 +1,17 @@
-# MCP Server v1.9.8
+# -----------------------------------------------------------------------------
+# MCP Server v1.9.9
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
-# Dashboards endpoint: disabled with 501 error
-# Version: 1.9.8
+# Dashboards endpoint: disabled with error message
+# Version: 1.9.9
+# -----------------------------------------------------------------------------
 
 import os
 import json
 import logging
 import requests
+import websockets
+import asyncio
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
 # -----------------------------------------------------------------------------
@@ -25,6 +30,7 @@ app = FastAPI(title="Home Assistant MCP Server")
 # -----------------------------------------------------------------------------
 HA_TOKEN: str | None = None
 HA_HTTP_BASE = "http://homeassistant:8123"
+HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 
 # -----------------------------------------------------------------------------
 # Startup: capture token ONCE
@@ -34,7 +40,11 @@ def startup():
     global HA_TOKEN
     log.info("=== MCP STARTUP BEGIN ===")
     log.info("Environment keys visible: %s", list(os.environ.keys()))
-    HA_TOKEN = os.getenv("HA_TOKEN") or os.getenv("HASSIO_TOKEN") or os.getenv("SUPERVISOR_TOKEN")
+    HA_TOKEN = (
+        os.getenv("HA_TOKEN")
+        or os.getenv("HASSIO_TOKEN")
+        or os.getenv("SUPERVISOR_TOKEN")
+    )
     if not HA_TOKEN:
         raise RuntimeError("No Home Assistant token found in environment")
     log.info("✅ Home Assistant token captured and stored")
@@ -51,6 +61,40 @@ def ha_rest_get(path: str):
         timeout=15,
     )
     return resp
+
+# -----------------------------------------------------------------------------
+# WebSocket helper
+# -----------------------------------------------------------------------------
+async def ha_ws_call(command: dict) -> dict:
+    assert HA_TOKEN, "HA_TOKEN not initialised"
+    async with websockets.connect(HA_WS_URL) as ws:
+        msg = json.loads(await ws.recv())
+        if msg.get("type") != "auth_required":
+            raise RuntimeError(f"Unexpected WS message: {msg}")
+        await ws.send(json.dumps({"type": "auth", "access_token": HA_TOKEN}))
+        auth_reply = json.loads(await ws.recv())
+        if auth_reply.get("type") != "auth_ok":
+            raise RuntimeError(f"WebSocket auth failed: {auth_reply}")
+        await ws.send(json.dumps(command))
+        while True:
+            reply = json.loads(await ws.recv())
+            if reply.get("type") == "result":
+                return reply
+
+# -----------------------------------------------------------------------------
+# WS fetchers
+# -----------------------------------------------------------------------------
+async def fetch_devices_ws():
+    result = await ha_ws_call({"id": 1, "type": "config/device_registry/list"})
+    return result.get("result", [])
+
+async def fetch_areas_ws():
+    result = await ha_ws_call({"id": 2, "type": "config/area_registry/list"})
+    return result.get("result", [])
+
+async def fetch_events_ws():
+    result = await ha_ws_call({"id": 3, "type": "get_event_types"})
+    return result.get("result", [])
 
 # -----------------------------------------------------------------------------
 # Core API endpoints
@@ -100,25 +144,18 @@ def services():
     return resp.json()
 
 @app.get("/api/devices")
-def devices():
-    resp = ha_rest_get("/api/config/device_registry")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Failed to fetch devices")
-    return {"count": len(resp.json()), "devices": resp.json()}
+async def devices():
+    devices = await fetch_devices_ws()
+    return {"count": len(devices), "devices": devices}
 
 @app.get("/api/areas")
-def areas():
-    resp = ha_rest_get("/api/config/area_registry")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Failed to fetch areas")
-    return {"count": len(resp.json()), "areas": resp.json()}
+async def areas():
+    areas = await fetch_areas_ws()
+    return {"count": len(areas), "areas": areas}
 
 @app.get("/api/events")
-def events():
-    resp = ha_rest_get("/api/events")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Failed to fetch events")
-    events_list = resp.json()
+async def events():
+    events_list = await fetch_events_ws()
     return {"count": len(events_list), "events": sorted(events_list)}
 
 @app.get("/api/timers")
@@ -126,15 +163,18 @@ def timers():
     resp = ha_rest_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch timers")
-    timers_list = [s for s in resp.json() if s.get("entity_id", "").startswith("timer.")]
-    return {"count": len(timers_list), "timers": timers_list}
+    timers = [s for s in resp.json() if s.get("entity_id", "").startswith("timer.")]
+    return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint disabled (v1.9.8)
+# Dashboards endpoint (v1.9.9) — disabled
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
-def dashboards():
+async def dashboards():
+    """
+    MCP v1.9.9: Dashboards functionality is disabled.
+    """
     raise HTTPException(
         status_code=501,
-        detail="Dashboard fetch not available in current MCP configuration"
+        detail="Dashboards functionality is not available in this MCP release"
     )
