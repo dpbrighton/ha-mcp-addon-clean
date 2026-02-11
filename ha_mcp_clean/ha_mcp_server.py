@@ -1,7 +1,7 @@
-# MCP Server v1.9.7
+# MCP Server v1.9.8
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
-# Dashboards endpoint: WS-only
-# Version: 1.9.7
+# Dashboards endpoint: REST first, then WS fallback
+# Version: 1.9.8
 
 import os
 import json
@@ -9,6 +9,7 @@ import logging
 import requests
 import websockets
 import asyncio
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 
@@ -96,8 +97,7 @@ async def fetch_events_ws():
 
 async def fetch_dashboards_ws():
     """
-    Fetch all dashboards via WS with correct dashboard IDs.
-    Returns list of dashboards or empty if WS fails.
+    Fetch all dashboards via WS (used only if REST fails)
     """
     dashboards_out = []
     try:
@@ -109,11 +109,7 @@ async def fetch_dashboards_ws():
 
     for dashboard_id, meta in dashboards_meta.items():
         try:
-            dash_resp = await ha_ws_call({
-                "id": 201,
-                "type": "lovelace/config",
-                "dashboard_id": dashboard_id
-            })
+            dash_resp = await ha_ws_call({"id": 201, "type": "lovelace/config", "dashboard_id": dashboard_id})
             dashboards_out.append({
                 "id": dashboard_id,
                 "title": meta.get("title", dashboard_id),
@@ -122,7 +118,6 @@ async def fetch_dashboards_ws():
             })
         except Exception as e:
             log.warning("Failed to fetch dashboard %s via WS: %s", dashboard_id, e)
-
     return dashboards_out
 
 # -----------------------------------------------------------------------------
@@ -196,12 +191,20 @@ def timers():
     return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.7, WS-only)
+# Dashboards endpoint (v1.9.8, REST first, then WS)
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
 async def dashboards():
     try:
-        dashboards_list = await fetch_dashboards_ws()
+        # REST fetch first
+        resp = ha_rest_get("/api/lovelace/dashboards")
+        if resp.status_code == 200:
+            dashboards_list = resp.json()
+        else:
+            log.warning("REST fetch for dashboards failed with status %s, trying WS", resp.status_code)
+            dashboards_list = await fetch_dashboards_ws()
         return {"count": len(dashboards_list), "dashboards": dashboards_list}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch dashboards via WS: {e}")
+        log.warning("REST fetch for dashboards failed: %s, falling back to WS", e)
+        dashboards_list = await fetch_dashboards_ws()
+        return {"count": len(dashboards_list), "dashboards": dashboards_list}
