@@ -1,7 +1,7 @@
-# MCP Server v1.9.6
+# MCP Server v1.9.7
 # Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
-# Dashboards endpoint: WS fetch + .storage fallback
-# Version: 1.9.6
+# Dashboards endpoint: WS-only
+# Version: 1.9.7
 
 import os
 import json
@@ -9,7 +9,6 @@ import logging
 import requests
 import websockets
 import asyncio
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 
@@ -31,12 +30,6 @@ HA_TOKEN: str | None = None
 HA_HTTP_BASE = "http://homeassistant:8123"
 HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 
-# v1.9.6 CHANGE: make storage path configurable, default to add-on mount
-CONFIG_STORAGE_PATH = os.getenv(
-    "HA_STORAGE_PATH",
-    "/config/.storage"
-)
-
 # -----------------------------------------------------------------------------
 # Startup: capture token ONCE
 # -----------------------------------------------------------------------------
@@ -53,7 +46,6 @@ def startup():
     if not HA_TOKEN:
         raise RuntimeError("No Home Assistant token found in environment")
     log.info("✅ Home Assistant token captured and stored")
-    log.info("Using HA storage path: %s", CONFIG_STORAGE_PATH)
     log.info("=== MCP STARTUP COMPLETE ===")
 
 # -----------------------------------------------------------------------------
@@ -117,9 +109,11 @@ async def fetch_dashboards_ws():
 
     for dashboard_id, meta in dashboards_meta.items():
         try:
-            dash_resp = await ha_ws_call(
-                {"id": 201, "type": "lovelace/config", "dashboard_id": dashboard_id}
-            )
+            dash_resp = await ha_ws_call({
+                "id": 201,
+                "type": "lovelace/config",
+                "dashboard_id": dashboard_id
+            })
             dashboards_out.append({
                 "id": dashboard_id,
                 "title": meta.get("title", dashboard_id),
@@ -129,30 +123,6 @@ async def fetch_dashboards_ws():
         except Exception as e:
             log.warning("Failed to fetch dashboard %s via WS: %s", dashboard_id, e)
 
-    return dashboards_out
-
-def fetch_dashboards_from_storage():
-    """
-    Fallback: read all Lovelace dashboard files from configured .storage path
-    """
-    dashboards_out = []
-    path = Path(CONFIG_STORAGE_PATH)
-    if not path.exists():
-        log.warning(".storage path does not exist: %s", CONFIG_STORAGE_PATH)
-        return dashboards_out
-
-    for file in path.glob("lovelace*"):
-        try:
-            with file.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            dashboards_out.append({
-                "id": data.get("id", file.stem),
-                "title": data.get("title", file.stem),
-                "mode": data.get("mode", "storage"),
-                "config": data
-            })
-        except Exception as e:
-            log.warning("Failed to read dashboard file %s: %s", file, e)
     return dashboards_out
 
 # -----------------------------------------------------------------------------
@@ -226,14 +196,12 @@ def timers():
     return {"count": len(timers), "timers": timers}
 
 # -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.6)
+# Dashboards endpoint (v1.9.7, WS-only)
 # -----------------------------------------------------------------------------
 @app.get("/api/dashboards")
 async def dashboards():
     try:
         dashboards_list = await fetch_dashboards_ws()
-        if not dashboards_list:
-            dashboards_list = fetch_dashboards_from_storage()
         return {"count": len(dashboards_list), "dashboards": dashboards_list}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch dashboards: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch dashboards via WS: {e}")
