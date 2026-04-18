@@ -1,17 +1,14 @@
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+FROM python:3.11-alpine
 
-# Install Python and deps
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    py3-requests
+# Install build deps for websockets C extension
+RUN apk add --no-cache gcc musl-dev
 
-# Install FastAPI + Uvicorn + WebSockets
-RUN pip3 install --no-cache-dir --break-system-packages \
+# Install Python dependencies
+RUN pip3 install --no-cache-dir \
     fastapi \
     uvicorn \
-    websockets
+    websockets \
+    requests
 
 # Copy app + wrapper
 COPY ha_mcp_server.py /app/ha_mcp_server.py
