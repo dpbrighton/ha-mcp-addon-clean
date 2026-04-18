@@ -1,7 +1,7 @@
 name: Home Assistant MCP Server
 slug: ha_mcp_clean
 description: MCP server for Home Assistant
-version: "1.0.2"
+version: "2.0.0"
 
 startup: application
 boot: auto

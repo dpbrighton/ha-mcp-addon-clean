@@ -1,8 +1,13 @@
 # -----------------------------------------------------------------------------
-# MCP Server v1.9.9
-# Baseline: Overview, Entities, Devices, Areas, Services, Scripts, Automations, Events, Timers
-# Dashboards endpoint: disabled with error message
-# Version: 1.9.9
+# MCP Server v2.0.0
+# Improvements:
+#   - Enriched entity responses (friendly_name, curated attributes)
+#   - Domain filtering on /api/entities?domain=light
+#   - Dedicated /api/battery endpoint with red/amber/green status
+#   - Single entity detail: GET /api/entity/{entity_id}
+#   - Write support: POST /api/call_service (turn lights on/off, etc.)
+#   - Real counts in /api/overview
+#   - POST /api/automation/trigger and /api/script/run
 # -----------------------------------------------------------------------------
 
 import os
@@ -11,8 +16,9 @@ import logging
 import requests
 import websockets
 import asyncio
-from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -23,7 +29,7 @@ log = logging.getLogger("ha-mcp")
 # -----------------------------------------------------------------------------
 # FastAPI app
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Home Assistant MCP Server")
+app = FastAPI(title="Home Assistant MCP Server", version="2.0.0")
 
 # -----------------------------------------------------------------------------
 # Global state
@@ -33,13 +39,12 @@ HA_HTTP_BASE = "http://homeassistant:8123"
 HA_WS_URL = "ws://homeassistant:8123/api/websocket"
 
 # -----------------------------------------------------------------------------
-# Startup: capture token ONCE
+# Startup
 # -----------------------------------------------------------------------------
 @app.on_event("startup")
 def startup():
     global HA_TOKEN
     log.info("=== MCP STARTUP BEGIN ===")
-    log.info("Environment keys visible: %s", list(os.environ.keys()))
     HA_TOKEN = (
         os.getenv("HA_TOKEN")
         or os.getenv("HASSIO_TOKEN")
@@ -47,26 +52,42 @@ def startup():
     )
     if not HA_TOKEN:
         raise RuntimeError("No Home Assistant token found in environment")
-    log.info("✅ Home Assistant token captured and stored")
+    log.info("✅ HA token captured (len=%d)", len(HA_TOKEN))
     log.info("=== MCP STARTUP COMPLETE ===")
 
 # -----------------------------------------------------------------------------
-# REST helper
+# Helpers
 # -----------------------------------------------------------------------------
-def ha_rest_get(path: str):
-    assert HA_TOKEN, "HA_TOKEN not initialised"
-    resp = requests.get(
-        f"{HA_HTTP_BASE}{path}",
-        headers={"Authorization": f"Bearer {HA_TOKEN}"},
-        timeout=15,
-    )
-    return resp
+def _headers():
+    return {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
-# -----------------------------------------------------------------------------
-# WebSocket helper
-# -----------------------------------------------------------------------------
+def ha_get(path: str):
+    assert HA_TOKEN
+    return requests.get(f"{HA_HTTP_BASE}{path}", headers=_headers(), timeout=15)
+
+def ha_post(path: str, payload: dict):
+    assert HA_TOKEN
+    return requests.post(f"{HA_HTTP_BASE}{path}", headers=_headers(), json=payload, timeout=15)
+
+def _enrich(entity: dict) -> dict:
+    """Return a clean, LLM-friendly representation of an HA entity state."""
+    attrs = entity.get("attributes", {})
+    # Pull out the most useful attributes; drop noisy/UI-only ones
+    skip = {"entity_picture", "icon", "entity_picture_local", "supported_features",
+            "supported_color_modes", "color_mode", "effect_list", "hs_color",
+            "xy_color", "min_mireds", "max_mireds"}
+    curated = {k: v for k, v in attrs.items() if k not in skip}
+    return {
+        "entity_id": entity["entity_id"],
+        "domain": entity["entity_id"].split(".")[0],
+        "friendly_name": attrs.get("friendly_name", entity["entity_id"]),
+        "state": entity["state"],
+        "last_changed": entity.get("last_changed"),
+        "attributes": curated,
+    }
+
 async def ha_ws_call(command: dict) -> dict:
-    assert HA_TOKEN, "HA_TOKEN not initialised"
+    assert HA_TOKEN
     async with websockets.connect(HA_WS_URL) as ws:
         msg = json.loads(await ws.recv())
         if msg.get("type") != "auth_required":
@@ -82,29 +103,20 @@ async def ha_ws_call(command: dict) -> dict:
                 return reply
 
 # -----------------------------------------------------------------------------
-# WS fetchers
-# -----------------------------------------------------------------------------
-async def fetch_devices_ws():
-    result = await ha_ws_call({"id": 1, "type": "config/device_registry/list"})
-    return result.get("result", [])
-
-async def fetch_areas_ws():
-    result = await ha_ws_call({"id": 2, "type": "config/area_registry/list"})
-    return result.get("result", [])
-
-async def fetch_events_ws():
-    result = await ha_ws_call({"id": 3, "type": "get_event_types"})
-    return result.get("result", [])
-
-# -----------------------------------------------------------------------------
-# Core API endpoints
+# Overview — real counts
 # -----------------------------------------------------------------------------
 @app.get("/api/overview")
 def overview():
-    resp = ha_rest_get("/api/config")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Failed to fetch overview data")
-    config = resp.json()
+    config_resp = ha_get("/api/config")
+    states_resp = ha_get("/api/states")
+    if config_resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to fetch HA config")
+    config = config_resp.json()
+    states = states_resp.json() if states_resp.status_code == 200 else []
+    domains: dict[str, int] = {}
+    for s in states:
+        d = s.get("entity_id", "").split(".")[0]
+        domains[d] = domains.get(d, 0) + 1
     return {
         "home_assistant": {
             "version": config.get("version"),
@@ -112,69 +124,185 @@ def overview():
             "time_zone": config.get("time_zone"),
             "unit_system": config.get("unit_system"),
             "installation_type": config.get("installation_type"),
-        }
+        },
+        "entity_counts_by_domain": domains,
+        "total_entities": len(states),
     }
 
+# -----------------------------------------------------------------------------
+# Entities — with domain filter and enrichment
+# -----------------------------------------------------------------------------
 @app.get("/api/entities")
-def entities():
-    resp = ha_rest_get("/api/states")
+def entities(domain: Optional[str] = Query(None, description="Filter by domain, e.g. light, switch, sensor")):
+    resp = ha_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch entities")
-    return {"count": len(resp.json()), "entities": resp.json()}
+    all_states = resp.json()
+    if domain:
+        all_states = [s for s in all_states if s.get("entity_id", "").startswith(f"{domain}.")]
+    enriched = [_enrich(s) for s in all_states]
+    return {"count": len(enriched), "domain_filter": domain, "entities": enriched}
 
+# -----------------------------------------------------------------------------
+# Single entity detail
+# -----------------------------------------------------------------------------
+@app.get("/api/entity/{entity_id:path}")
+def entity_detail(entity_id: str):
+    resp = ha_get(f"/api/states/{entity_id}")
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"Entity '{entity_id}' not found")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to fetch entity")
+    return _enrich(resp.json())
+
+# -----------------------------------------------------------------------------
+# Battery status — red/amber/green
+# -----------------------------------------------------------------------------
+@app.get("/api/battery")
+def battery():
+    resp = ha_get("/api/states")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to fetch entities")
+    result = []
+    for entity in resp.json():
+        attrs = entity.get("attributes", {})
+        level = attrs.get("battery_level") or attrs.get("battery")
+        if level is None:
+            # Also check entities whose domain is 'sensor' and unit is '%' with 'battery' in ID
+            if (entity.get("entity_id", "").find("battery") != -1
+                    and attrs.get("unit_of_measurement") == "%"):
+                try:
+                    level = float(entity["state"])
+                except (ValueError, TypeError):
+                    continue
+        if level is None:
+            continue
+        try:
+            level = int(float(level))
+        except (ValueError, TypeError):
+            continue
+        if level >= 60:
+            status = "green"
+        elif level >= 20:
+            status = "amber"
+        else:
+            status = "red"
+        result.append({
+            "entity_id": entity["entity_id"],
+            "friendly_name": attrs.get("friendly_name", entity["entity_id"]),
+            "battery_level": level,
+            "status": status,
+        })
+    result.sort(key=lambda x: x["battery_level"])
+    return {"count": len(result), "devices": result}
+
+# -----------------------------------------------------------------------------
+# Call a service (write/control)
+# -----------------------------------------------------------------------------
+class ServiceCall(BaseModel):
+    domain: str
+    service: str
+    entity_id: Optional[str] = None
+    service_data: Optional[dict] = None
+
+@app.post("/api/call_service")
+def call_service(call: ServiceCall):
+    """
+    Call any Home Assistant service.
+    Examples:
+      {"domain":"light","service":"turn_on","entity_id":"light.living_room","service_data":{"brightness_pct":80}}
+      {"domain":"switch","service":"turn_off","entity_id":"switch.kettle"}
+      {"domain":"climate","service":"set_temperature","entity_id":"climate.living_room","service_data":{"temperature":21}}
+    """
+    payload = call.service_data or {}
+    if call.entity_id:
+        payload["entity_id"] = call.entity_id
+    resp = ha_post(f"/api/services/{call.domain}/{call.service}", payload)
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"Service call failed ({resp.status_code}): {resp.text}")
+    return {"success": True, "result": resp.json() if resp.content else []}
+
+# -----------------------------------------------------------------------------
+# Automations
+# -----------------------------------------------------------------------------
 @app.get("/api/automations")
 def automations():
-    resp = ha_rest_get("/api/states")
+    resp = ha_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch automations")
-    return [s for s in resp.json() if s.get("entity_id", "").startswith("automation.")]
+    items = [_enrich(s) for s in resp.json() if s.get("entity_id", "").startswith("automation.")]
+    return {"count": len(items), "automations": items}
 
+@app.post("/api/automation/trigger")
+def trigger_automation(entity_id: str):
+    resp = ha_post(f"/api/services/automation/trigger", {"entity_id": entity_id})
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"Trigger failed: {resp.text}")
+    return {"success": True}
+
+# -----------------------------------------------------------------------------
+# Scripts
+# -----------------------------------------------------------------------------
 @app.get("/api/scripts")
 def scripts():
-    resp = ha_rest_get("/api/states")
+    resp = ha_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch scripts")
-    return [s for s in resp.json() if s.get("entity_id", "").startswith("script.")]
+    items = [_enrich(s) for s in resp.json() if s.get("entity_id", "").startswith("script.")]
+    return {"count": len(items), "scripts": items}
 
+@app.post("/api/script/run")
+def run_script(entity_id: str):
+    script_name = entity_id.replace("script.", "")
+    resp = ha_post(f"/api/services/script/{script_name}", {})
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"Script run failed: {resp.text}")
+    return {"success": True}
+
+# -----------------------------------------------------------------------------
+# Services catalogue
+# -----------------------------------------------------------------------------
 @app.get("/api/services")
-def services():
-    resp = ha_rest_get("/api/services")
+def services(domain: Optional[str] = Query(None, description="Filter by domain, e.g. light")):
+    resp = ha_get("/api/services")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch services")
-    return resp.json()
+    data = resp.json()
+    if domain:
+        data = [s for s in data if s.get("domain") == domain]
+    return data
 
+# -----------------------------------------------------------------------------
+# Devices & Areas (WebSocket registry)
+# -----------------------------------------------------------------------------
 @app.get("/api/devices")
 async def devices():
-    devices = await fetch_devices_ws()
-    return {"count": len(devices), "devices": devices}
+    devs = await ha_ws_call({"id": 1, "type": "config/device_registry/list"})
+    items = devs.get("result", [])
+    return {"count": len(items), "devices": items}
 
 @app.get("/api/areas")
 async def areas():
-    areas = await fetch_areas_ws()
-    return {"count": len(areas), "areas": areas}
+    result = await ha_ws_call({"id": 2, "type": "config/area_registry/list"})
+    items = result.get("result", [])
+    return {"count": len(items), "areas": items}
 
+# -----------------------------------------------------------------------------
+# Events
+# -----------------------------------------------------------------------------
 @app.get("/api/events")
 async def events():
-    events_list = await fetch_events_ws()
-    return {"count": len(events_list), "events": sorted(events_list)}
+    result = await ha_ws_call({"id": 3, "type": "get_event_types"})
+    items = result.get("result", [])
+    return {"count": len(items), "events": sorted(items)}
 
+# -----------------------------------------------------------------------------
+# Timers
+# -----------------------------------------------------------------------------
 @app.get("/api/timers")
 def timers():
-    resp = ha_rest_get("/api/states")
+    resp = ha_get("/api/states")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to fetch timers")
-    timers = [s for s in resp.json() if s.get("entity_id", "").startswith("timer.")]
-    return {"count": len(timers), "timers": timers}
-
-# -----------------------------------------------------------------------------
-# Dashboards endpoint (v1.9.9) — disabled
-# -----------------------------------------------------------------------------
-@app.get("/api/dashboards")
-async def dashboards():
-    """
-    MCP v1.9.9: Dashboards functionality is disabled.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail="Dashboards functionality is not available in this MCP release"
-    )
+    items = [_enrich(s) for s in resp.json() if s.get("entity_id", "").startswith("timer.")]
+    return {"count": len(items), "timers": items}
